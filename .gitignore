@@ -1,0 +1,11 @@
+# Visual Studio / .NET
+.vs/
+**/bin/
+**/obj/
+*.user
+*.suo
+*.log
+*.tmp
+.env
+appsettings.local.json
+TestResults/
