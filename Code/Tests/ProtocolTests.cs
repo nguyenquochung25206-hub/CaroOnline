@@ -5,7 +5,6 @@ using Xunit;
 
 namespace Caro.Tests;
 
-// Kiểm thử dựa trên schema hiện có của TV2; cần chạy lại khi TV2 cập nhật protocol.
 public class ProtocolTests
 {
     [Fact]
