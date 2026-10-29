@@ -5,8 +5,6 @@ using Xunit;
 
 namespace Caro.Tests;
 
-// Các bài kiểm thử độc lập dùng TcpListener giả lập.
-// Chưa phải integration test với TcpServer của TV1.
 public class ConnectionTests
 {
     [Fact]
