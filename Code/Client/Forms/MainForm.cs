@@ -7,11 +7,13 @@ namespace Caro.Client.Forms;
 
 /// <summary>
 /// Giao diện chính của Caro Client - Trách nhiệm TV3:
-/// Quản lý cấu hình IP/Port, kết nối/ngắt kết nối tới Server, đo độ trễ Ping/Pong, hiển thị trạng thái và bảng Log giao thức.
+/// Quản lý cấu hình IP/Port, kết nối/ngắt kết nối tới Server, đo độ trễ Ping/Pong,
+/// tích hợp Sảnh chờ (LobbyForm), tạo phòng, tham gia phòng và hiển thị bảng Log giao thức.
 /// </summary>
 public sealed class MainForm : Form
 {
     private readonly ConnectionService _connectionService;
+    private LobbyForm? _lobbyForm;
 
     // Controls trên thanh kết nối
     private readonly TextBox _txtHost = new();
@@ -26,11 +28,12 @@ public sealed class MainForm : Form
     private readonly Panel _pnlStatusIndicator = new();
     private readonly Label _lblStatusText = new();
 
-    // Controls tương tác phòng / game (Sẵn sàng kết nối với TV4 & TV5)
+    // Controls tương tác phòng / game (Nhiệm vụ TV3 - Tuần 2)
     private readonly GroupBox _grpActions = new();
     private readonly Button _btnCreateRoom = new();
     private readonly Button _btnJoinRoom = new();
     private readonly TextBox _txtRoomId = new();
+    private readonly Button _btnOpenLobby = new();
     private readonly Label _lblRoomHint = new();
 
     // Controls bảng log giao thức mạng
@@ -41,6 +44,7 @@ public sealed class MainForm : Form
     // Thanh trạng thái dưới cùng (StatusStrip)
     private readonly StatusStrip _statusStrip = new();
     private readonly ToolStripStatusLabel _statusLabel = new();
+    private readonly ToolStripStatusLabel _roomStatusLabel = new();
     private readonly ToolStripStatusLabel _pingLabel = new();
     private readonly ToolStripStatusLabel _playerLabel = new();
 
@@ -55,10 +59,10 @@ public sealed class MainForm : Form
 
     private void InitializeComponent()
     {
-        Text = "Caro Online Client — v1.0 [TCP Network]";
-        Width = 960;
-        Height = 680;
-        MinimumSize = new Size(800, 550);
+        Text = "Caro Online Client — v2.0 [Tuần 2: Sảnh & Phòng Đấu]";
+        Width = 980;
+        Height = 700;
+        MinimumSize = new Size(820, 580);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9f, FontStyle.Regular);
         BackColor = Color.FromArgb(240, 242, 245);
@@ -74,7 +78,7 @@ public sealed class MainForm : Form
 
         var lblAppTitle = new Label
         {
-            Text = "CARO ONLINE — BẢNG ĐIỀU KHIỂN KẾT NỐI",
+            Text = "CARO ONLINE — BẢNG ĐIỀU KHIỂN & KẾT NỐI",
             Font = new Font("Segoe UI", 11f, FontStyle.Bold),
             ForeColor = Color.FromArgb(24, 76, 120),
             AutoSize = true,
@@ -145,7 +149,7 @@ public sealed class MainForm : Form
 
         _btnOpenConnectDialog.Text = "Cửa sổ kết nối...";
         _btnOpenConnectDialog.Location = new Point(820, 40);
-        _btnOpenConnectDialog.Size = new Size(115, 30);
+        _btnOpenConnectDialog.Size = new Size(125, 30);
         _btnOpenConnectDialog.BackColor = Color.FromArgb(230, 235, 240);
         _btnOpenConnectDialog.FlatStyle = FlatStyle.Flat;
         _btnOpenConnectDialog.FlatAppearance.BorderColor = Color.FromArgb(180, 190, 205);
@@ -165,15 +169,15 @@ public sealed class MainForm : Form
             Padding = new Padding(12)
         };
 
-        // Group phòng chơi (Tích hợp cùng TV4/TV5)
-        _grpActions.Text = "Sảnh & Phòng đấu (Lobby / Rooms)";
+        // Group phòng chơi (Nhiệm vụ TV3 - Tuần 2)
+        _grpActions.Text = "Sảnh Chờ & Phòng Đấu (Room Lobby - Tuần 2)";
         _grpActions.Dock = DockStyle.Top;
         _grpActions.Height = 85;
         _grpActions.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
 
         _btnCreateRoom.Text = "Tạo phòng mới";
         _btnCreateRoom.Location = new Point(15, 30);
-        _btnCreateRoom.Size = new Size(130, 34);
+        _btnCreateRoom.Size = new Size(125, 34);
         _btnCreateRoom.BackColor = Color.FromArgb(25, 135, 84);
         _btnCreateRoom.ForeColor = Color.White;
         _btnCreateRoom.FlatStyle = FlatStyle.Flat;
@@ -181,14 +185,14 @@ public sealed class MainForm : Form
         _btnCreateRoom.Cursor = Cursors.Hand;
         _btnCreateRoom.Click += OnCreateRoomClicked;
 
-        var lblRoom = new Label { Text = "Mã phòng:", Location = new Point(170, 37), AutoSize = true };
-        _txtRoomId.Location = new Point(245, 34);
-        _txtRoomId.Size = new Size(110, 25);
+        var lblRoom = new Label { Text = "Mã phòng:", Location = new Point(155, 37), AutoSize = true };
+        _txtRoomId.Location = new Point(225, 34);
+        _txtRoomId.Size = new Size(100, 25);
         _txtRoomId.PlaceholderText = "VD: 101";
 
         _btnJoinRoom.Text = "Vào phòng";
-        _btnJoinRoom.Location = new Point(365, 30);
-        _btnJoinRoom.Size = new Size(100, 34);
+        _btnJoinRoom.Location = new Point(335, 30);
+        _btnJoinRoom.Size = new Size(95, 34);
         _btnJoinRoom.BackColor = Color.FromArgb(13, 110, 253);
         _btnJoinRoom.ForeColor = Color.White;
         _btnJoinRoom.FlatStyle = FlatStyle.Flat;
@@ -196,18 +200,28 @@ public sealed class MainForm : Form
         _btnJoinRoom.Cursor = Cursors.Hand;
         _btnJoinRoom.Click += OnJoinRoomClicked;
 
-        _lblRoomHint.Text = "(Sẵn sàng chuyển tiếp cho TV4/TV5 khi hoàn tất logic phòng)";
-        _lblRoomHint.ForeColor = Color.Gray;
+        _btnOpenLobby.Text = "Mở Sảnh Chờ (Lobby Form)...";
+        _btnOpenLobby.Location = new Point(440, 30);
+        _btnOpenLobby.Size = new Size(195, 34);
+        _btnOpenLobby.BackColor = Color.FromArgb(24, 76, 120);
+        _btnOpenLobby.ForeColor = Color.White;
+        _btnOpenLobby.FlatStyle = FlatStyle.Flat;
+        _btnOpenLobby.FlatAppearance.BorderSize = 0;
+        _btnOpenLobby.Cursor = Cursors.Hand;
+        _btnOpenLobby.Click += (_, _) => OpenOrFocusLobby();
+
+        _lblRoomHint.Text = "• Hai người chơi vào cùng phòng sẽ thấy nhau (Quân X & Quân O).";
+        _lblRoomHint.ForeColor = Color.FromArgb(100, 116, 139);
         _lblRoomHint.Font = new Font("Segoe UI", 8.5f, FontStyle.Italic);
         _lblRoomHint.AutoSize = true;
-        _lblRoomHint.Location = new Point(480, 39);
+        _lblRoomHint.Location = new Point(645, 39);
 
-        _grpActions.Controls.AddRange([_btnCreateRoom, lblRoom, _txtRoomId, _btnJoinRoom, _lblRoomHint]);
+        _grpActions.Controls.AddRange([_btnCreateRoom, lblRoom, _txtRoomId, _btnJoinRoom, _btnOpenLobby, _lblRoomHint]);
 
         // Group hiển thị Log mạng & giao thức
         var grpLogs = new GroupBox
         {
-            Text = "Nhật ký truyền thông mạng (Protocol & Network Logs)",
+            Text = "Nhật Ký Truyền Thông Mạng (Protocol & Network Logs)",
             Dock = DockStyle.Fill,
             Font = new Font("Segoe UI", 9f, FontStyle.Bold),
             Padding = new Padding(10)
@@ -249,6 +263,10 @@ public sealed class MainForm : Form
         _statusLabel.Spring = true;
         _statusLabel.TextAlign = ContentAlignment.MiddleLeft;
 
+        _roomStatusLabel.Text = "Phòng: Chưa vào";
+        _roomStatusLabel.BorderSides = ToolStripStatusLabelBorderSides.Left;
+        _roomStatusLabel.Padding = new Padding(10, 0, 10, 0);
+
         _pingLabel.Text = "Ping: -- ms";
         _pingLabel.BorderSides = ToolStripStatusLabelBorderSides.Left;
         _pingLabel.Padding = new Padding(10, 0, 10, 0);
@@ -257,7 +275,7 @@ public sealed class MainForm : Form
         _playerLabel.BorderSides = ToolStripStatusLabelBorderSides.Left;
         _playerLabel.Padding = new Padding(10, 0, 10, 0);
 
-        _statusStrip.Items.AddRange([_statusLabel, _pingLabel, _playerLabel]);
+        _statusStrip.Items.AddRange([_statusLabel, _roomStatusLabel, _pingLabel, _playerLabel]);
 
         // Ghép vào Form
         Controls.Add(pnlMain);
@@ -272,8 +290,16 @@ public sealed class MainForm : Form
         _connectionService.PingUpdated += OnPingUpdated;
         _connectionService.MessageReceived += OnMessageReceived;
 
+        // Đăng ký sự kiện phòng chơi (Tuần 2)
+        _connectionService.RoomCreated += OnRoomCreated;
+        _connectionService.RoomJoined += OnRoomJoined;
+        _connectionService.JoinRoomFailed += OnJoinRoomFailed;
+        _connectionService.RoomLeft += OnRoomLeft;
+        _connectionService.GameStarted += OnGameStarted;
+
         FormClosing += (_, _) =>
         {
+            _lobbyForm?.Dispose();
             _connectionService.Dispose();
         };
     }
@@ -321,34 +347,55 @@ public sealed class MainForm : Form
 
     private async void OnCreateRoomClicked(object? sender, EventArgs e)
     {
-        if (!_connectionService.IsConnected) return;
-
-        var createRoomMsg = new NetworkMessage
+        if (!_connectionService.IsConnected)
         {
-            Type = MessageTypes.CreateRoom,
-            Payload = new { HostName = _connectionService.PlayerName }
-        };
-        await _connectionService.SendMessageAsync(createRoomMsg);
+            MessageBox.Show("Vui lòng kết nối tới server trước khi tạo phòng.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        OpenOrFocusLobby();
+        await _connectionService.CreateRoomAsync();
     }
 
     private async void OnJoinRoomClicked(object? sender, EventArgs e)
     {
-        if (!_connectionService.IsConnected) return;
+        if (!_connectionService.IsConnected)
+        {
+            MessageBox.Show("Vui lòng kết nối tới server trước khi vào phòng.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
 
         string roomId = _txtRoomId.Text.Trim();
         if (string.IsNullOrWhiteSpace(roomId))
         {
             MessageBox.Show("Vui lòng nhập mã phòng cần tham gia.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _txtRoomId.Focus();
             return;
         }
 
-        var joinRoomMsg = new NetworkMessage
-        {
-            Type = MessageTypes.JoinRoom,
-            Payload = new { RoomId = roomId, PlayerName = _connectionService.PlayerName }
-        };
-        await _connectionService.SendMessageAsync(joinRoomMsg);
+        OpenOrFocusLobby();
+        await _connectionService.JoinRoomAsync(roomId);
     }
+
+    private void OpenOrFocusLobby()
+    {
+        if (_lobbyForm == null || _lobbyForm.IsDisposed)
+        {
+            _lobbyForm = new LobbyForm(_connectionService);
+            _lobbyForm.Show(this);
+        }
+        else
+        {
+            if (_lobbyForm.WindowState == FormWindowState.Minimized)
+            {
+                _lobbyForm.WindowState = FormWindowState.Normal;
+            }
+            _lobbyForm.BringToFront();
+            _lobbyForm.Focus();
+        }
+    }
+
+    #region Connection & Room Event Handlers
 
     private void OnConnectionStateChanged(bool isConnected, string status)
     {
@@ -389,6 +436,66 @@ public sealed class MainForm : Form
         }
     }
 
+    private void OnRoomCreated(RoomInfo room)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => OnRoomCreated(room));
+            return;
+        }
+
+        _roomStatusLabel.Text = $"Phòng: #{room.RoomId} (Chủ phòng - X)";
+        AppendLog($"[SẢNH] Đã tạo phòng #{room.RoomId} thành công! Đang chờ đối thủ tham gia...", Color.FromArgb(75, 181, 67));
+    }
+
+    private void OnRoomJoined(RoomInfo room)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => OnRoomJoined(room));
+            return;
+        }
+
+        string role = room.IsHost ? "Chủ phòng (X)" : "Khách (O)";
+        _roomStatusLabel.Text = $"Phòng: #{room.RoomId} ({role})";
+        AppendLog($"[SẢNH] Đã vào phòng #{room.RoomId}: {room.HostPlayer} (X) vs {room.GuestPlayer ?? "Đang chờ"} (O)", Color.FromArgb(75, 181, 67));
+    }
+
+    private void OnJoinRoomFailed(string reason)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => OnJoinRoomFailed(reason));
+            return;
+        }
+
+        _roomStatusLabel.Text = "Phòng: Chưa vào";
+        AppendLog($"[LỖI PHÒNG] Không thể vào phòng: {reason}", Color.FromArgb(255, 99, 71));
+    }
+
+    private void OnRoomLeft(string roomId)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => OnRoomLeft(roomId));
+            return;
+        }
+
+        _roomStatusLabel.Text = "Phòng: Chưa vào";
+        AppendLog($"[SẢNH] Đã rời khỏi phòng #{roomId}.", Color.FromArgb(200, 200, 200));
+    }
+
+    private void OnGameStarted(string roomId)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => OnGameStarted(roomId));
+            return;
+        }
+
+        AppendLog($"[TRẬN ĐẤU] Ván cờ tại phòng #{roomId} đã chính thức bắt đầu!", Color.FromArgb(0, 191, 255));
+    }
+
     private void OnLogGenerated(string logText, bool isError)
     {
         if (InvokeRequired)
@@ -415,6 +522,8 @@ public sealed class MainForm : Form
         }
     }
 
+    #endregion
+
     private void UpdateUIState(bool isConnected)
     {
         _btnConnect.Enabled = !isConnected;
@@ -432,6 +541,7 @@ public sealed class MainForm : Form
         if (!isConnected)
         {
             _pingLabel.Text = "Ping: -- ms";
+            _roomStatusLabel.Text = "Phòng: Chưa vào";
         }
     }
 }
