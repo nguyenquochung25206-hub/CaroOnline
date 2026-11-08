@@ -4,8 +4,16 @@ using Caro.Server.Services;
 
 namespace Caro.Server.Networking;
 
+// Lang nghe va tiep nhan nhieu Client ket noi qua TCP, tao phien (ClientSession)
+// rieng cho tung Client, va dung Server mot cach an toan (TV1 - Tuan 2).
 public sealed class TcpServer
 {
+    // So Client toi da cung luc. Vuot qua se bi tu choi de Server khong qua tai.
+    private const int DefaultMaxClients = 200;
+
+    // Thoi gian toi da cho cac Client dong het khi tat Server (mili giay).
+    private const int ShutdownWaitMilliseconds = 3000;
+
     // Dia chi IP ma Server se lang nghe.
     private readonly IPAddress _ipAddress;
 
@@ -15,40 +23,43 @@ public sealed class TcpServer
     // Doi tuong quan ly cac Client.
     private readonly ClientManager _clientManager;
 
-    // Doi tuong lang nghe ket noi TCP.
-    private TcpListener? _listener;
+    // So Client toi da cho phep.
+    private readonly int _maxClients;
 
     // Khoi tao TCP Server voi IP, port va ClientManager.
+    // maxClients la tuy chon nen Program.cs cu van bien dich binh thuong.
     public TcpServer(
         IPAddress ipAddress,
         int port,
-        ClientManager clientManager)
+        ClientManager clientManager,
+        int maxClients = DefaultMaxClients)
     {
-        _ipAddress = ipAddress;
+        _ipAddress = ipAddress ?? throw new ArgumentNullException(nameof(ipAddress));
         _port = port;
-        _clientManager = clientManager;
+        _clientManager = clientManager
+            ?? throw new ArgumentNullException(nameof(clientManager));
+        _maxClients = maxClients > 0 ? maxClients : DefaultMaxClients;
     }
 
     // Khoi dong Server va tiep tuc chay cho den khi co yeu cau dung.
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         // Tao TCP Listener voi dia chi IP va port da cau hinh.
-        _listener = new TcpListener(_ipAddress, _port);
+        var listener = new TcpListener(_ipAddress, _port);
 
         try
         {
             // Bat dau lang nghe ket noi tu Client.
-            _listener.Start();
+            listener.Start();
 
             // Thong bao dia chi va port dang lang nghe.
-            Console.WriteLine(
-                $"[SERVER] Listening on {_ipAddress}:{_port}");
+            Log($"[SERVER] Listening on {_ipAddress}:{_port}");
 
             // Khi token bi huy, dung Listener de thoat khoi viec cho ket noi.
             using CancellationTokenRegistration registration =
                 cancellationToken.Register(() =>
                 {
-                    _listener.Stop();
+                    listener.Stop();
                 });
 
             // Lap cho den khi nhan duoc yeu cau dung Server.
@@ -60,7 +71,7 @@ public sealed class TcpServer
                 {
                     // Cho Client moi ket noi den Server.
                     // Ham bat dong bo nen khong can chan luong xu ly.
-                    client = await _listener.AcceptTcpClientAsync(
+                    client = await listener.AcceptTcpClientAsync(
                         cancellationToken);
                 }
                 catch (OperationCanceledException)
@@ -68,36 +79,125 @@ public sealed class TcpServer
                     // Thoat vong lap khi Server bi huy.
                     break;
                 }
-                catch (SocketException)
-                    when (cancellationToken.IsCancellationRequested)
+                catch (ObjectDisposedException)
                 {
-                    // Bo qua loi socket xuat hien do dung Listener.
+                    // Listener da bi dung.
                     break;
                 }
+                catch (SocketException ex)
+                {
+                    // Loi socket do dung Listener thi thoat.
+                    if (cancellationToken.IsCancellationRequested)
+                        break;
 
-                // Tao phien lam viec rieng cho Client vua ket noi.
-                var session = new ClientSession(
-                    client,
-                    Console.WriteLine,
-                    _clientManager.RemoveAsync);
+                    // Loi accept tam thoi: ghi log va tiep tuc nhan Client khac,
+                    // khong de 1 loi lam Server ngung hoat dong.
+                    Log($"[SERVER] Accept error: {ex.Message}");
+                    await Task.Delay(200);
+                    continue;
+                }
+
+                // Qua tai thi tu choi Client moi.
+                if (_clientManager.ClientCount >= _maxClients)
+                {
+                    Log($"[SERVER] Rejected a client: server full ({_maxClients}).");
+                    CloseQuietly(client);
+                    continue;
+                }
+
+                ClientSession session;
+
+                try
+                {
+                    ConfigureSocket(client);
+
+                    // Tao phien lam viec rieng cho Client vua ket noi.
+                    // - Log: ghi log.
+                    // - RemoveAsync: goi khi Client ngat ket noi.
+                    // - DispatchAsync: chuyen message nghiep vu cho TV5 xu ly.
+                    session = new ClientSession(
+                        client,
+                        Log,
+                        _clientManager.RemoveAsync,
+                        _clientManager.DispatchAsync);
+                }
+                catch (Exception ex)
+                {
+                    // Client da ngat ngay luc vua ket noi.
+                    Log($"[SERVER] Could not start session: {ex.Message}");
+                    CloseQuietly(client);
+                    continue;
+                }
 
                 // Them Client vao danh sach quan ly.
                 _clientManager.Add(session);
 
                 // Chay xu ly Client rieng de Server tiep tuc nhan ket noi moi.
-                _ = Task.Run(() => session.RunAsync());
+                _ = Task.Run(() => RunSessionAsync(session));
             }
         }
         finally
         {
             // Dung lang nghe khi Server ket thuc.
-            _listener.Stop();
+            listener.Stop();
 
             // Dong cac Client dang duoc quan ly.
             _clientManager.CloseAll();
 
+            // Cho cac phien Client don dep xong (toi da vai giay).
+            int waited = 0;
+            while (_clientManager.ClientCount > 0 &&
+                   waited < ShutdownWaitMilliseconds)
+            {
+                await Task.Delay(100);
+                waited += 100;
+            }
+
             // Ghi log Server da dung.
-            Console.WriteLine("[SERVER] Stopped.");
+            Log("[SERVER] Stopped.");
         }
+    }
+
+    // Chay 1 phien Client; moi loi duoc bat de khong lam sap Server.
+    private async Task RunSessionAsync(ClientSession session)
+    {
+        try
+        {
+            await session.RunAsync();
+        }
+        catch (Exception ex)
+        {
+            Log($"[SERVER] Session {session.RemoteAddress} crashed: {ex.Message}");
+            session.Close();
+        }
+    }
+
+    // NoDelay: gui nuoc di ngay, khong cho gop goi (giam tre).
+    // KeepAlive: giup phat hien Client mat mang ma khong dong ket noi.
+    private static void ConfigureSocket(TcpClient client)
+    {
+        client.NoDelay = true;
+        client.Client.SetSocketOption(
+            SocketOptionLevel.Socket,
+            SocketOptionName.KeepAlive,
+            true);
+    }
+
+    // Dong ket noi ma khong nem loi.
+    private static void CloseQuietly(TcpClient client)
+    {
+        try
+        {
+            client.Close();
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    // Ghi log kem gio (sau nay co the doi sang ServerLogger).
+    private static void Log(string message)
+    {
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}");
     }
 }
