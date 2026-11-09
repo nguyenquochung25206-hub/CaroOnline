@@ -23,7 +23,7 @@ namespace CaroGame.Client.Controls
 
             Size = new Size(600, 600);
             BackColor = Color.Bisque;
-ẽ
+
             DoubleBuffered = true;
         }
 
