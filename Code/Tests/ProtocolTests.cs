@@ -26,11 +26,13 @@ public class ProtocolTests
         Assert.Equal("PING", document.RootElement.GetProperty("Type").GetString());
     }
 
-    [Fact]
-    public void Malformed_Json_Throws_JsonException()
-    {
-        Assert.Throws<JsonException>(() => MessageCodec.Decode("{not valid json}"));
-    }
+  [Fact]
+public void Malformed_Json_Returns_Null()
+{
+    var result = MessageCodec.Decode("{not valid json}");
+
+    Assert.Null(result);
+}
 
     [Fact]
     public void Message_Without_Type_Fails_Validation()
@@ -40,12 +42,21 @@ public class ProtocolTests
         Assert.Contains("Type", error);
     }
 
-    [Fact]
-    public void Message_With_Type_Passes_Current_Validation()
+   
+[Fact]
+public void Message_With_Type_And_RequestId_Passes_Validation()
+{
+    var message = new NetworkMessage
     {
-        var message = new NetworkMessage { Type = "PING" };
-        Assert.True(MessageValidator.IsValid(message, out var error), error);
-    }
+        Type = "PING",
+        RequestId = "req-001"
+    };
+
+    Assert.True(
+        MessageValidator.IsValid(message, out var error),
+        error);
+}
+
 
     [Fact]
     public void Null_Json_Fails_Validation()
