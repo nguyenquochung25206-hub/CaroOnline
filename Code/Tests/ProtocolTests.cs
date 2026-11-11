@@ -64,4 +64,50 @@ public void Message_With_Type_And_RequestId_Passes_Validation()
         var message = MessageCodec.Decode("null");
         Assert.False(MessageValidator.IsValid(message, out _));
     }
+    
+    // TEST 7: RequestId rong
+    [Fact]
+    public void Missing_RequestId_Fails_Validation()
+    {
+        var message = new NetworkMessage
+        {
+            Type = "PING",
+            RequestId = ""
+        };
+
+        Assert.False(
+            MessageValidator.IsValid(message, out var error));
+
+        Assert.Contains("RequestId", error);
+    }
+
+    // TEST 8: Type chi chua khoang trang
+    [Fact]
+    public void Empty_Type_Fails_Validation()
+    {
+        var message = new NetworkMessage
+        {
+            Type = "   ",
+            RequestId = "req-001"
+        };
+
+        Assert.False(
+            MessageValidator.IsValid(message, out var error));
+
+        Assert.Contains("Type", error);
+    }
+
+    // TEST 9: Goi tin vuot gioi han
+    [Fact]
+    public void Oversized_Raw_Message_Fails_Validation()
+    {
+        string rawJson = new string('A', 16385);
+
+        Assert.False(
+            MessageValidator.IsRawLengthValid(
+                rawJson, out var error));
+
+        Assert.Contains("16384", error);
+    }
+
 }
