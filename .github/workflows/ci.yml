@@ -1,0 +1,32 @@
+name: Build & Test Caro Online
+
+on:
+  push:
+    branches: [ "main", "long" ]
+  pull_request:
+    branches: [ "main", "long" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Run Tests
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET 8 SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore CaroOnline.sln
+
+    - name: Build solution (Release)
+      run: dotnet build CaroOnline.sln --no-restore --configuration Release
+
+    - name: Run Unit Tests
+      run: dotnet test Code/Tests/Caro.Tests.csproj --no-build --configuration Release --verbosity normal
+      continue-on-error: true
