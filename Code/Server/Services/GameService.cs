@@ -1,87 +1,103 @@
 // TODO TV5: Điều phối lượt đi, kiểm tra nước đi và kết thúc trận.
 
 using System;
+using Caro.Server.Validation;
 
 namespace Caro.Server.Services
 {
     public sealed class GameService
     {
-        private const int BoardSize = 15;
-        private const int WinCount = 5;
+        private readonly string[,] board;
 
-        private char[,] board;
-        private char currentTurn;
+        private readonly string playerX;
+        private readonly string playerO;
+
+        private string currentPlayerId;
+        private string? winnerId;
+
         private bool isGameOver;
 
-        public GameService()
+        public GameService(string playerX, string playerO)
         {
-            board = new char[BoardSize, BoardSize];
-            currentTurn = 'X';
+            if (string.IsNullOrWhiteSpace(playerX) ||
+                string.IsNullOrWhiteSpace(playerO) ||
+                playerX == playerO)
+            {
+                throw new ArgumentException(
+                    "Thong tin nguoi choi khong hop le.");
+            }
+
+            this.playerX = playerX;
+            this.playerO = playerO;
+
+            board = new string[
+                MoveValidator.BoardSize,
+                MoveValidator.BoardSize
+            ];
+
+            currentPlayerId = playerX;
+            winnerId = null;
             isGameOver = false;
         }
 
-        // Lấy lượt chơi hiện tại
-        public char GetCurrentTurn()
+        public string GetCurrentPlayer()
         {
-            return currentTurn;
+            return currentPlayerId;
         }
 
-        // Kiểm tra trạng thái trận đấu
+        public string GetWinner()
+        {
+            return winnerId;
+        }
+
         public bool IsGameOver()
         {
             return isGameOver;
         }
 
         // Xử lý nước đi
-        public bool MakeMove(int row, int col, char player,
-                             out string message)
+        public bool MakeMove(
+            string playerId,
+            int row,
+            int col,
+            out string error)
         {
-            message = "";
+            error = string.Empty;
 
-            // Kiểm tra trận đấu đã kết thúc
             if (isGameOver)
             {
-                message = "Trận đấu đã kết thúc.";
+                error = "Tran dau da ket thuc.";
                 return false;
             }
 
-            // Kiểm tra người chơi hợp lệ
-            if (player != 'X' && player != 'O')
+            if (playerId != playerX && playerId != playerO)
             {
-                message = "Người chơi không hợp lệ.";
+                error = "Nguoi choi khong thuoc tran dau.";
                 return false;
             }
 
-            // Kiểm tra đúng lượt
-            if (player != currentTurn)
+            if (playerId != currentPlayerId)
             {
-                message = "Chưa đến lượt của bạn.";
+                error = "Chua den luot cua ban.";
                 return false;
             }
 
-            // Kiểm tra tọa độ
-            if (row < 0 || row >= BoardSize ||
-                col < 0 || col >= BoardSize)
+            if (!MoveValidator.IsValid(
+                board, row, col, playerId, out error))
             {
-                message = "Vị trí đánh không hợp lệ.";
-                return false;
-            }
-
-            // Kiểm tra ô đã có quân cờ
-            if (board[row, col] != '\0')
-            {
-                message = "Ô này đã có quân cờ.";
                 return false;
             }
 
             // Cập nhật bàn cờ
-            board[row, col] = player;
+            board[row, col] = playerId;
 
-            // Kiểm tra thắng
-            if (CheckWin(row, col, player))
+            // Kiểm tra chiến thắng
+            if (CheckWin(row, col, playerId))
             {
+                winnerId = playerId;
                 isGameOver = true;
-                message = "Người chơi " + player + " đã chiến thắng!";
+                error = "Nguoi choi " + playerId +
+                        " da chien thang.";
                 return true;
             }
 
@@ -89,29 +105,30 @@ namespace Caro.Server.Services
             if (CheckDraw())
             {
                 isGameOver = true;
-                message = "Trận đấu hòa!";
+                error = "Tran dau hoa.";
                 return true;
             }
 
             // Chuyển lượt
-            currentTurn = currentTurn == 'X' ? 'O' : 'X';
+            currentPlayerId =
+                currentPlayerId == playerX ? playerO : playerX;
 
-            message = "Nước đi hợp lệ.";
+            error = "Nuoc di hop le.";
             return true;
         }
 
-        // Kiểm tra chiến thắng
-        private bool CheckWin(int row, int col, char player)
+        // Kiểm tra thắng
+        private bool CheckWin(int row, int col, string playerId)
         {
             int[,] directions =
             {
-                { 0, 1 },   // Ngang
-                { 1, 0 },   // Dọc
-                { 1, 1 },   // Chéo chính
-                { 1, -1 }   // Chéo phụ
+                { 0, 1 },
+                { 1, 0 },
+                { 1, 1 },
+                { 1, -1 }
             };
 
-            for (int i = 0; i < directions.GetLength(0); i++)
+            for (int i = 0; i < 4; i++)
             {
                 int count = 1;
 
@@ -119,36 +136,37 @@ namespace Caro.Server.Services
                     row, col,
                     directions[i, 0],
                     directions[i, 1],
-                    player);
+                    playerId);
 
                 count += CountDirection(
                     row, col,
                     -directions[i, 0],
                     -directions[i, 1],
-                    player);
+                    playerId);
 
-                if (count >= WinCount)
+                if (count >= 5)
                     return true;
             }
 
             return false;
         }
 
-        // Đếm quân cờ liên tiếp
+        // Đếm quân liên tiếp
         private int CountDirection(
-            int row, int col,
+            int row,
+            int col,
             int rowDirection,
             int colDirection,
-            char player)
+            string playerId)
         {
             int count = 0;
 
             int r = row + rowDirection;
             int c = col + colDirection;
 
-            while (r >= 0 && r < BoardSize &&
-                   c >= 0 && c < BoardSize &&
-                   board[r, c] == player)
+            while (r >= 0 && r < MoveValidator.BoardSize &&
+                   c >= 0 && c < MoveValidator.BoardSize &&
+                   board[r, c] == playerId)
             {
                 count++;
                 r += rowDirection;
@@ -158,14 +176,14 @@ namespace Caro.Server.Services
             return count;
         }
 
-        // Kiểm tra bàn cờ hòa
+        // Kiểm tra hòa
         private bool CheckDraw()
         {
-            for (int row = 0; row < BoardSize; row++)
+            for (int r = 0; r < MoveValidator.BoardSize; r++)
             {
-                for (int col = 0; col < BoardSize; col++)
+                for (int c = 0; c < MoveValidator.BoardSize; c++)
                 {
-                    if (board[row, col] == '\0')
+                    if (board[r, c] == null)
                         return false;
                 }
             }
@@ -174,18 +192,11 @@ namespace Caro.Server.Services
         }
 
         // Lấy dữ liệu bàn cờ
-        public char[,] GetBoard()
+        public string[,] GetBoard()
         {
-            return (char[,])board.Clone();
-        }
-
-        // Khởi động lại trận đấu
-        public void ResetGame()
-        {
-            board = new char[BoardSize, BoardSize];
-            currentTurn = 'X';
-            isGameOver = false;
+            return (string[,])board.Clone();
         }
     }
 }
+
 
