@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using Caro.Shared.Messages;
@@ -13,6 +14,8 @@ public static class MessageCodec
 
     public static string Encode(NetworkMessage message)
     {
+        if(message == null)
+            throw new ArgumentNullException(nameof(message));
         string json = JsonSerializer.Serialize(message, Options);
         return json + "\n";
     }
