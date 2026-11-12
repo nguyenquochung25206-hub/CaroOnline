@@ -48,18 +48,6 @@ public sealed class LobbyForm : Form
     private readonly TextBox _txtChatMessage = new();
     private readonly Button _btnSendChat = new();
 
-    // Helper properties & methods phục vụ kiểm thử (Testability)
-    public string CurrentMatchStatus => _lblMatchStatus.Text;
-    public string LobbyStatus => _lblLobbyStatus.Text;
-    public bool IsStartGameButtonEnabled => _btnStartGame.Enabled;
-    public void SetCreateRoomName(string name) => _txtCreateRoomName.Text = name;
-    public void SetJoinRoomId(string id) => _txtJoinRoomId.Text = id;
-    public void TriggerCreateRoom() => OnCreateRoomClicked(this, EventArgs.Empty);
-    public void TriggerJoinRoom() => OnJoinRoomClicked(this, EventArgs.Empty);
-    public void TriggerLeaveRoom() => OnLeaveRoomClicked(this, EventArgs.Empty);
-    public void TriggerStartGame() => OnStartGameClicked(this, EventArgs.Empty);
-    public void TriggerSendChat(string msg) { _txtChatMessage.Text = msg; OnSendChatClicked(this, EventArgs.Empty); }
-
     public LobbyForm(ConnectionService connectionService)
     {
         _connectionService = connectionService ?? throw new ArgumentNullException(nameof(connectionService));
