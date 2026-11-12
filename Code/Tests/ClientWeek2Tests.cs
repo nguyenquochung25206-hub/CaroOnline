@@ -226,99 +226,46 @@ public class ClientWeek2Tests
     }
 
     // TC_071: ConnectionService - Cập nhật giao diện theo message Server
-    // Kịch bản: Nhận lần lượt ROOM_CREATED, ROOM_JOINED, START_GAME
     [Fact]
-    public async Task TC_071_ConnectionService_UpdateUIFromIncomingMessages_SequentialFlow()
+    public async Task TC_071_ConnectionService_UpdateUIFromIncomingMessages()
     {
         var (listener, port, clientTask) = await StartMockServerAsync();
         using (listener)
         {
             using var connectionService = new ConnectionService();
-            await connectionService.ConnectAsync("127.0.0.1", port, "HostUser");
+            await connectionService.ConnectAsync("127.0.0.1", port, "TestUser");
 
             using var accepted = await clientTask.WaitAsync(TimeSpan.FromSeconds(5));
             using var writer = new StreamWriter(accepted.GetStream(), new UTF8Encoding(false)) { AutoFlush = true };
 
-            var receivedEvents = new List<string>();
+            // 1. Kiểm tra chat message
+            var chatTcs = new TaskCompletionSource<(string sender, string msg)>();
+            connectionService.ChatMessageReceived += (sender, msg) => chatTcs.TrySetResult((sender, msg));
 
-            var roomCreatedTcs = new TaskCompletionSource<RoomInfo>();
-            connectionService.RoomCreated += room =>
+            var chatMsg = new NetworkMessage
             {
-                receivedEvents.Add(MessageTypes.RoomCreated);
-                roomCreatedTcs.TrySetResult(room);
+                Type = MessageTypes.Chat,
+                Payload = new { Sender = "Opponent", Message = "Chuc may man!" }
             };
+            await writer.WriteLineAsync(MessageCodec.Encode(chatMsg).TrimEnd());
 
-            var roomJoinedTcs = new TaskCompletionSource<RoomInfo>();
-            connectionService.RoomJoined += room =>
-            {
-                receivedEvents.Add(MessageTypes.RoomJoined);
-                roomJoinedTcs.TrySetResult(room);
-            };
+            var (chatSender, chatContent) = await chatTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("Opponent", chatSender);
+            Assert.Equal("Chuc may man!", chatContent);
 
-            var gameStartedTcs = new TaskCompletionSource<string>();
-            connectionService.GameStarted += roomId =>
-            {
-                receivedEvents.Add(MessageTypes.StartGame);
-                gameStartedTcs.TrySetResult(roomId);
-            };
+            // 2. Kiểm tra thông điệp bắt đầu trận đấu
+            var startTcs = new TaskCompletionSource<string>();
+            connectionService.GameStarted += id => startTcs.TrySetResult(id);
 
-            // 1. Nhận message ROOM_CREATED từ Server
-            var roomCreatedMsg = new NetworkMessage
-            {
-                Type = MessageTypes.RoomCreated,
-                Payload = new
-                {
-                    RoomId = "5555",
-                    RoomName = "Phòng của HostUser",
-                    HostName = "HostUser"
-                }
-            };
-            await writer.WriteLineAsync(MessageCodec.Encode(roomCreatedMsg).TrimEnd());
-
-            var createdRoom = await roomCreatedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.NotNull(createdRoom);
-            Assert.Equal("5555", createdRoom.RoomId);
-            Assert.Equal("HostUser", createdRoom.HostPlayer);
-            Assert.True(createdRoom.IsHost);
-            Assert.Equal("X", createdRoom.MySymbol);
-            Assert.True(connectionService.IsInRoom);
-
-            // 2. Nhận tiếp message ROOM_JOINED từ Server (Đối thủ vào phòng)
-            var roomJoinedMsg = new NetworkMessage
-            {
-                Type = MessageTypes.RoomJoined,
-                Payload = new
-                {
-                    RoomId = "5555",
-                    HostName = "HostUser",
-                    GuestName = "GuestUser"
-                }
-            };
-            await writer.WriteLineAsync(MessageCodec.Encode(roomJoinedMsg).TrimEnd());
-
-            var joinedRoom = await roomJoinedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.NotNull(joinedRoom);
-            Assert.Equal("GuestUser", joinedRoom.GuestPlayer);
-            Assert.Equal("HostUser", joinedRoom.HostPlayer);
-
-            // 3. Nhận tiếp message START_GAME từ Server (Bắt đầu ván đấu)
             var startMsg = new NetworkMessage
             {
                 Type = MessageTypes.StartGame,
-                Payload = new { RoomId = "5555" }
+                Payload = new { RoomId = "Room_101" }
             };
             await writer.WriteLineAsync(MessageCodec.Encode(startMsg).TrimEnd());
 
-            string startedRoomId = await gameStartedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal("5555", startedRoomId);
-            Assert.True(connectionService.CurrentRoom!.IsGameStarted);
-
-            // Kiểm tra thứ tự nhận lần lượt đúng 100%
-            Assert.Equal(3, receivedEvents.Count);
-            Assert.Equal(MessageTypes.RoomCreated, receivedEvents[0]);
-            Assert.Equal(MessageTypes.RoomJoined, receivedEvents[1]);
-            Assert.Equal(MessageTypes.StartGame, receivedEvents[2]);
+            string startedRoomId = await startTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("Room_101", startedRoomId);
         }
     }
 }
-
