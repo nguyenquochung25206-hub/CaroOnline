@@ -48,6 +48,18 @@ public sealed class MainForm : Form
     private readonly ToolStripStatusLabel _pingLabel = new();
     private readonly ToolStripStatusLabel _playerLabel = new();
 
+    // Helper properties & methods phục vụ kiểm thử (Testability)
+    public ConnectionService ConnectionService => _connectionService;
+    public string StatusText => _lblStatusText.Text;
+    public string RoomStatusText => _roomStatusLabel.Text;
+    public string PingText => _pingLabel.Text;
+    public void SetHost(string host) => _txtHost.Text = host;
+    public void SetPort(int port) => _numPort.Value = Math.Clamp(port, (int)_numPort.Minimum, (int)_numPort.Maximum);
+    public void SetPlayerName(string name) => _txtName.Text = name;
+    public void TriggerConnect() => OnConnectClicked(this, EventArgs.Empty);
+    public void TriggerDisconnect() => OnDisconnectClicked(this, EventArgs.Empty);
+    public void TriggerPing() => OnPingClicked(this, EventArgs.Empty);
+
     public MainForm()
     {
         _connectionService = new ConnectionService();
