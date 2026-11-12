@@ -1,19 +1,46 @@
 using System.Net.Sockets;
 using System.Text;
+using Caro.Server.Logging;
 using Caro.Shared.Messages;
 using Caro.Shared.Protocol;
 
 namespace Caro.Server.Networking;
 
-// Quan ly phien ket noi cua tung Client (TV1 - Tuan 2).
+// Ly do phien Client bi dong. TV5 (RoomService) co the doc ClientSession.CloseReason
+// trong su kien ClientDisconnected de biet doi thu thoat binh thuong hay mat mang.
+public enum DisconnectReason
+{
+    // Client chu dong dong ket noi (thoat game, tat ung dung).
+    ClientClosed,
+
+    // Server chu dong dong (Server tat, goi Close()).
+    ClosedByServer,
+
+    // Client khong gui gi qua thoi gian cho phep.
+    Timeout,
+
+    // Mat mang, bi reset, gui/nhan that bai.
+    NetworkError,
+
+    // Client gui du lieu sai nghiem trong (dong qua dai...).
+    InvalidData,
+
+    // Loi khong mong doi phia Server.
+    Error
+}
+
+// Quan ly phien ket noi cua tung Client (TV1 - Tuan 2 + Tuan 3).
 //  - Doc message JSON theo tung dong (newline-delimited), co gioi han do dai.
 //  - Tu xu ly HELLO -> WELCOME va PING -> PONG.
-//  - Cac message khac (CREATE_ROOM, JOIN_ROOM, MOVE, CHAT...) chuyen cho
-//    ClientManager.MessageReceived de TV5 xu ly.
-//  - Cho phep cac lop khac GUI RIENG cho Client nay (SendAsync) an toan khi
-//    nhieu luong cung gui (vi du: broadcast nuoc di).
+//  - Cac message khac chuyen cho ClientManager.MessageReceived de TV5 xu ly.
+//  - Gui RIENG an toan khi nhieu luong cung gui (vi du broadcast nuoc di).
+//  - Tuan 3: timeout khi Client im lang, ghi ly do ngat ket noi, giai phong tai nguyen.
 public sealed class ClientSession
 {
+    // Thoi gian cho mac dinh khi Client khong gui gi. Client (TV3) can gui PING dinh ky
+    // (vi du 15 giay/lan) de khong bi coi la mat ket noi.
+    public static readonly TimeSpan DefaultIdleTimeout = TimeSpan.FromSeconds(60);
+
     // Gioi han 1 dong JSON (byte). Dong dai hon se bi coi la du lieu xau.
     private const int MaxLineBytes = 64 * 1024;
 
@@ -33,14 +60,14 @@ public sealed class ClientSession
     private readonly TcpClient _client;
     private readonly NetworkStream _stream;
 
-    // Ham ghi log su kien.
-    private readonly Action<string> _log;
-
     // Ham goi khi Client ngat ket noi de xoa khoi ClientManager.
     private readonly Func<ClientSession, Task> _onDisconnected;
 
     // Ham chuyen message (khong phai HELLO/PING) cho noi xu ly nghiep vu.
     private readonly Func<ClientSession, NetworkMessage, Task>? _onMessage;
+
+    // Thoi gian cho toi da giua 2 message cua Client (Infinite = khong gioi han).
+    private readonly TimeSpan _idleTimeout;
 
     // Moi luc chi cho 1 tac vu ghi len socket de cac message khong bi tron lan.
     private readonly SemaphoreSlim _sendLock = new(1, 1);
@@ -70,25 +97,32 @@ public sealed class ClientSession
     // RoomService (TV5) gan khi vao/roi phong de ClientManager broadcast theo phong.
     public string? RoomId { get; set; }
 
-    // Thoi diem ket noi va thoi diem nhan message gan nhat (dung cho timeout o tuan 3).
+    // Thoi diem ket noi va thoi diem nhan message gan nhat.
     public DateTime ConnectedAtUtc { get; }
     public DateTime LastActivityUtc { get; private set; }
+
+    // Ly do phien bi dong (chi co y nghia sau khi IsClosed = true).
+    public DisconnectReason CloseReason { get; private set; } = DisconnectReason.ClientClosed;
 
     // Phien da dong chua.
     public bool IsClosed => Volatile.Read(ref _closed) == 1;
 
-    // Khoi tao phien Client. onMessage la tuy chon (null thi message la bi bao loi).
+    // Khoi tao phien Client.
+    //  - onMessage: tuy chon (null thi message nghiep vu bi bao loi).
+    //  - idleTimeout: null = dung DefaultIdleTimeout (60 giay); TimeSpan.Zero = khong timeout.
     public ClientSession(
         TcpClient client,
-        Action<string> log,
         Func<ClientSession, Task> onDisconnected,
-        Func<ClientSession, NetworkMessage, Task>? onMessage = null)
+        Func<ClientSession, NetworkMessage, Task>? onMessage = null,
+        TimeSpan? idleTimeout = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
-        _log = log ?? throw new ArgumentNullException(nameof(log));
         _onDisconnected = onDisconnected
             ?? throw new ArgumentNullException(nameof(onDisconnected));
         _onMessage = onMessage;
+
+        TimeSpan timeout = idleTimeout ?? DefaultIdleTimeout;
+        _idleTimeout = timeout > TimeSpan.Zero ? timeout : Timeout.InfiniteTimeSpan;
 
         _stream = client.GetStream();
 
@@ -102,16 +136,17 @@ public sealed class ClientSession
     // Doc va xu ly message trong suot thoi gian Client ket noi.
     public async Task RunAsync()
     {
-        string reason = "client closed connection";
+        DisconnectReason reason = DisconnectReason.ClientClosed;
+        string detail = "client closed the connection";
 
         try
         {
-            _log($"Client connected: {RemoteAddress}");
+            ServerLogger.ClientConnected(RemoteAddress);
 
             while (!IsClosed)
             {
                 // Doc 1 dong JSON; null nghia la Client da dong ket noi.
-                string? line = await ReadLineAsync(_cts.Token)
+                string? line = await ReadLineWithIdleTimeoutAsync()
                     .ConfigureAwait(false);
 
                 if (line == null)
@@ -127,38 +162,52 @@ public sealed class ClientSession
                 await ProcessLineAsync(line).ConfigureAwait(false);
             }
         }
+        catch (TimeoutException)
+        {
+            // Client im lang qua lau: co the da mat mang ma Server khong nhan duoc tin hieu dong.
+            reason = DisconnectReason.Timeout;
+            detail = $"no data for {_idleTimeout.TotalSeconds:0} seconds";
+            await SendErrorAsync("Disconnected: idle timeout").ConfigureAwait(false);
+        }
         catch (OperationCanceledException)
         {
-            reason = "session cancelled";
+            // Phien bi dong boi noi khac (Server tat, goi Close()).
+            reason = DisconnectReason.ClosedByServer;
+            detail = "session cancelled";
         }
         catch (InvalidDataException ex)
         {
             // Dong qua dai: bao loi roi ngat Client.
-            reason = ex.Message;
-            _log($"Invalid data from {RemoteAddress}: {ex.Message}");
+            reason = DisconnectReason.InvalidData;
+            detail = ex.Message;
             await SendErrorAsync(ex.Message).ConfigureAwait(false);
         }
         catch (IOException ex)
         {
-            reason = $"network error: {ex.Message}";
+            // Client tat dot ngot / bi reset ket noi.
+            reason = DisconnectReason.NetworkError;
+            detail = $"network error: {ex.Message}";
         }
         catch (SocketException ex)
         {
-            reason = $"socket error: {ex.Message}";
+            reason = DisconnectReason.NetworkError;
+            detail = $"socket error: {ex.Message}";
         }
         catch (ObjectDisposedException)
         {
-            reason = "connection closed";
+            reason = DisconnectReason.ClosedByServer;
+            detail = "connection closed";
         }
         catch (Exception ex)
         {
             // Bat moi loi con lai de mot Client loi khong lam sap Server.
-            reason = $"unexpected error: {ex.Message}";
+            reason = DisconnectReason.Error;
+            detail = $"unexpected error: {ex.GetType().Name}: {ex.Message}";
         }
         finally
         {
-            // Dong ket noi Client.
-            Close();
+            // Dong ket noi Client (neu da dong truoc do thi giu ly do dong dau tien).
+            Close(reason);
 
             // Bao cho ClientManager biet de xoa khoi danh sach (va bao cho RoomService).
             try
@@ -167,10 +216,22 @@ public sealed class ClientSession
             }
             catch (Exception ex)
             {
-                _log($"Error in disconnect handler for {RemoteAddress}: {ex.Message}");
+                ServerLogger.Error($"Error in disconnect handler for {RemoteAddress}", ex);
             }
 
-            _log($"Client disconnected: {RemoteAddress} ({reason})");
+            string text = CloseReason == reason
+                ? $"{CloseReason}: {detail}"
+                : CloseReason.ToString();
+
+            bool abnormal = CloseReason is DisconnectReason.Timeout
+                or DisconnectReason.NetworkError
+                or DisconnectReason.InvalidData
+                or DisconnectReason.Error;
+
+            ServerLogger.ClientDisconnected(RemoteAddress, PlayerName, text, abnormal);
+
+            // Giai phong cac doi tuong con lai cua phien.
+            ReleaseResources();
         }
     }
 
@@ -231,9 +292,9 @@ public sealed class ClientSession
         {
             // Het gio hoac phien da bi dong. Co the da ghi do dang nen phai dong han.
             if (!IsClosed)
-                _log($"Send timeout to {RemoteAddress}, closing session.");
+                ServerLogger.Warn($"Send timeout to {RemoteAddress}, closing session.");
 
-            Close();
+            Close(DisconnectReason.NetworkError);
             return false;
         }
         catch (Exception ex) when (
@@ -243,24 +304,32 @@ public sealed class ClientSession
             ex is InvalidOperationException)
         {
             if (!IsClosed)
-                _log($"Send failed to {RemoteAddress}: {ex.Message}");
+                ServerLogger.Warn($"Send failed to {RemoteAddress}: {ex.Message}");
 
-            Close();
+            Close(DisconnectReason.NetworkError);
             return false;
         }
         finally
         {
             if (locked)
-                _sendLock.Release();
+                ReleaseSendLock();
         }
     }
 
-    // Dong ket noi Client. Co the goi nhieu lan va tu nhieu luong.
+    // Server chu dong dong ket noi Client nay (vi du kick, Server tat).
     public void Close()
     {
-        // Chi lan dau tien duoc dong that su.
+        Close(DisconnectReason.ClosedByServer);
+    }
+
+    // Dong ket noi Client voi ly do cu the. Co the goi nhieu lan va tu nhieu luong;
+    // chi lan dau tien co tac dung va ly do dau tien duoc giu lai.
+    public void Close(DisconnectReason reason)
+    {
         if (Interlocked.Exchange(ref _closed, 1) == 1)
             return;
+
+        CloseReason = reason;
 
         try
         {
@@ -273,12 +342,76 @@ public sealed class ClientSession
 
         try
         {
-            // Dong socket va ket thuc ket noi TCP.
+            // Dong socket va luong du lieu (TcpClient.Close giai phong ca NetworkStream).
             _client.Close();
         }
         catch (Exception)
         {
             // Bo qua loi phat sinh trong qua trinh dong socket.
+        }
+    }
+
+    // Giai phong cac doi tuong con lai sau khi phien ket thuc. Ham chi duoc goi mot lan,
+    // cuoi RunAsync. Cac luong khac con gui do se nhan ObjectDisposedException va tu bo cuoc.
+    private void ReleaseResources()
+    {
+        try
+        {
+            _cts.Dispose();
+        }
+        catch (Exception)
+        {
+        }
+
+        try
+        {
+            _lineBuffer.Dispose();
+        }
+        catch (Exception)
+        {
+        }
+
+        try
+        {
+            _sendLock.Dispose();
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    // Tra khoa gui; khong loi neu khoa da bi giai phong.
+    private void ReleaseSendLock()
+    {
+        try
+        {
+            _sendLock.Release();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (SemaphoreFullException)
+        {
+        }
+    }
+
+    // Doc 1 dong nhung neu Client im lang qua _idleTimeout thi nem TimeoutException.
+    private async Task<string?> ReadLineWithIdleTimeoutAsync()
+    {
+        if (_idleTimeout == Timeout.InfiniteTimeSpan)
+            return await ReadLineAsync(_cts.Token).ConfigureAwait(false);
+
+        using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        idleCts.CancelAfter(_idleTimeout);
+
+        try
+        {
+            return await ReadLineAsync(idleCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
+        {
+            // Bi huy boi dong ho timeout chu khong phai do phien bi dong.
+            throw new TimeoutException("Client idle timeout.");
         }
     }
 
@@ -348,7 +481,7 @@ public sealed class ClientSession
     {
         if (!MessageValidator.IsRawLengthValid(line, out string rawError))
         {
-            _log($"Rejected message from {RemoteAddress}: {rawError}");
+            ServerLogger.InvalidMessage(RemoteAddress, rawError);
             await SendErrorAsync(rawError).ConfigureAwait(false);
             return;
         }
@@ -357,14 +490,14 @@ public sealed class ClientSession
 
         if (message == null)
         {
-            _log($"Invalid JSON from {RemoteAddress}");
+            ServerLogger.InvalidMessage(RemoteAddress, "invalid JSON");
             await SendErrorAsync("Invalid JSON message").ConfigureAwait(false);
             return;
         }
 
         if (!MessageValidator.IsValid(message, out string error))
         {
-            _log($"Invalid message from {RemoteAddress}: {error}");
+            ServerLogger.InvalidMessage(RemoteAddress, error);
             await SendErrorAsync(error, message.RequestId).ConfigureAwait(false);
             return;
         }
@@ -403,7 +536,7 @@ public sealed class ClientSession
         if (name.Length > 0)
             PlayerName = name;
 
-        _log($"HELLO from {RemoteAddress} as '{PlayerName}'");
+        ServerLogger.Info($"HELLO from {RemoteAddress} as '{PlayerName}'");
 
         await SendAsync(new NetworkMessage
         {
@@ -435,7 +568,7 @@ public sealed class ClientSession
         catch (Exception ex)
         {
             // Loi xu ly 1 message khong duoc lam mat ket noi cua Client.
-            _log($"Error handling {message.Type} from {RemoteAddress}: {ex.Message}");
+            ServerLogger.Error($"Error handling {message.Type} from {RemoteAddress}", ex);
             await SendErrorAsync("Server error while handling request", message.RequestId)
                 .ConfigureAwait(false);
         }
