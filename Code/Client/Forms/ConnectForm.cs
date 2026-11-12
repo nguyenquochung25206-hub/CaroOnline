@@ -19,12 +19,6 @@ public sealed class ConnectForm : Form
     public string ServerHost => _txtHost.Text.Trim();
     public int ServerPort => (int)_numPort.Value;
     public string PlayerName => _txtName.Text.Trim();
-    public string StatusMessage => _lblStatus.Text;
-
-    public void SetHost(string host) => _txtHost.Text = host;
-    public void SetPort(int port) => _numPort.Value = Math.Clamp(port, (int)_numPort.Minimum, (int)_numPort.Maximum);
-    public void SetPlayerName(string name) => _txtName.Text = name;
-    public void TriggerConnect() => OnConnectClicked(this, EventArgs.Empty);
 
     private readonly ConnectionService? _connectionService;
 
