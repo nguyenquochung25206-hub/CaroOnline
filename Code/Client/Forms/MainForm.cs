@@ -105,7 +105,7 @@ public sealed class MainForm : Form
         var lblPort = new Label { Text = "Port:", AutoSize = true, Location = new Point(220, 45), Font = new Font("Segoe UI", 9f, FontStyle.Bold) };
         _numPort.Minimum = 1;
         _numPort.Maximum = 65535;
-        _numPort.Value = 8888;
+        _numPort.Value = 5000;
         _numPort.Size = new Size(80, 25);
         _numPort.Location = new Point(260, 42);
 
