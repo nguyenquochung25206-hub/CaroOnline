@@ -481,7 +481,7 @@ public sealed class LobbyForm : Form
 
         if (success)
         {
-            UpdateViewMode();
+            _lblLobbyStatus.Text = "Đã gửi yêu cầu tạo phòng. Đang đợi máy chủ xác nhận và cấp mã phòng...";
         }
         else
         {
@@ -662,6 +662,15 @@ public sealed class LobbyForm : Form
         _btnStartGame.Enabled = false;
 
         AppendChatSystem("Trận đấu chính thức bắt đầu! Chúc hai người chơi thi đấu tốt!");
+
+        // Mở GameForm truyền ConnectionService, ký hiệu của mình và tên hai người
+        string mySymbol = _connectionService.CurrentRoom?.MySymbol ?? "X";
+        string playerX = _connectionService.CurrentRoom?.HostPlayer ?? "Player X";
+        string playerO = _connectionService.CurrentRoom?.GuestPlayer ?? "Player O";
+
+        var gameForm = new CaroGame.Client.GameForm(_connectionService, mySymbol, playerX, playerO);
+        gameForm.Show();
+
         MessageBox.Show($"Ván cờ tại phòng #{roomId} đã chính thức bắt đầu!\n(Quân X đi trước, quân O đi sau)", "Bắt đầu trận đấu", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
