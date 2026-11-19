@@ -22,7 +22,7 @@ public sealed class RoomInfo
 
 /// <summary>
 /// Service cấp ứng dụng quản lý trạng thái kết nối, mã hóa/giải mã NetworkMessage và giao tiếp với Server.
-/// Đảm nhiệm: Kết nối TCP, Đo Ping/Pong, Tạo/Vào/Rời phòng, Chat và bắt đầu trận đấu (Nhiệm vụ TV3 - Tuần 1 & Tuần 2).
+/// Đảm nhiệm: Kết nối TCP, Đo Ping/Pong định kỳ (15s/45s), Tạo/Vào/Rời phòng, Nước đi Caro và Chat.
 /// </summary>
 public sealed class ConnectionService : IDisposable
 {
@@ -31,9 +31,15 @@ public sealed class ConnectionService : IDisposable
     private string? _pendingPingId;
     private bool _isDisposed;
 
+    // Ping Timer định kỳ: gửi PING mỗi 15 giây; nếu quá 45 giây không có PONG thì ngắt kết nối
+    private System.Threading.Timer? _pingTimer;
+    private DateTime _lastPongReceivedTime = DateTime.UtcNow;
+    private const int PingIntervalSeconds = 15;
+    private const int PongTimeoutSeconds = 45;
+
     public bool IsConnected => _tcpClientService.IsConnected;
     public string? Host { get; private set; }
-    public int Port { get; private set; }
+    public int Port { get; private set; } = 5000;
     public string PlayerName { get; private set; } = "Player";
 
     // Trạng thái phòng hiện tại
@@ -56,6 +62,13 @@ public sealed class ConnectionService : IDisposable
     public event Action<string, string>? ChatMessageReceived; // (sender, content)
     public event Action<string>? GameStarted;              // (roomId)
 
+    // Sự kiện trận đấu và bàn cờ Caro (GameForm)
+    public event Action<int, int, string, string>? BoardUpdated; // (row, col, symbol, nextTurn)
+    public event Action<int, int>? MoveAccepted;                 // (row, col)
+    public event Action<string>? MoveRejected;                  // (reason)
+    public event Action<string, string, string>? GameOver;       // (winnerSymbol, winnerName, reason)
+    public event Action<string>? OpponentLeft;                   // (opponentName)
+
     public ConnectionService()
     {
         _tcpClientService = new TcpClientService();
@@ -65,9 +78,9 @@ public sealed class ConnectionService : IDisposable
     }
 
     /// <summary>
-    /// Thực hiện kết nối tới Server, lưu lại thông tin và gửi gói HELLO ban đầu.
+    /// Thực hiện kết nối tới Server, lưu lại thông tin, gửi gói HELLO và kích hoạt Timer PING định kỳ.
     /// </summary>
-    public async Task<bool> ConnectAsync(string host, int port, string playerName, CancellationToken cancellationToken = default)
+    public async Task<bool> ConnectAsync(string host, int port = 5000, string playerName = "Player", CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(host))
         {
@@ -90,8 +103,13 @@ public sealed class ConnectionService : IDisposable
         {
             await _tcpClientService.ConnectAsync(Host, Port, timeoutMilliseconds: 5000, cancellationToken).ConfigureAwait(false);
 
+            _lastPongReceivedTime = DateTime.UtcNow;
+
             Log($"Kết nối thành công tới {Host}:{Port}!", isError: false);
             ConnectionStateChanged?.Invoke(true, $"Đã kết nối tới {Host}:{Port}");
+
+            // Khởi động PING định kỳ mỗi 15 giây
+            StartPingTimer();
 
             // Gửi thông điệp HELLO tự giới thiệu client
             await SendHelloAsync().ConfigureAwait(false);
@@ -106,13 +124,51 @@ public sealed class ConnectionService : IDisposable
     }
 
     /// <summary>
+    /// Khởi động Timer gửi PING định kỳ mỗi 15 giây.
+    /// </summary>
+    private void StartPingTimer()
+    {
+        StopPingTimer();
+        _lastPongReceivedTime = DateTime.UtcNow;
+        _pingTimer = new System.Threading.Timer(OnPingTimerCallback, null, TimeSpan.FromSeconds(PingIntervalSeconds), TimeSpan.FromSeconds(PingIntervalSeconds));
+    }
+
+    private void StopPingTimer()
+    {
+        _pingTimer?.Dispose();
+        _pingTimer = null;
+    }
+
+    private void OnPingTimerCallback(object? state)
+    {
+        if (!IsConnected) return;
+
+        // Nếu quá 45 giây không nhận được PONG từ Server thì phát hiện Server chết ngầm và ngắt kết nối
+        if (DateTime.UtcNow - _lastPongReceivedTime > TimeSpan.FromSeconds(PongTimeoutSeconds))
+        {
+            Log($"[MẤT KẾT NỐI] Đã quá {PongTimeoutSeconds} giây không có phản hồi PONG từ Server. Đóng kết nối an toàn.", isError: true);
+            Disconnect();
+            return;
+        }
+
+        // Gửi PING giữ kết nối
+        _ = SendPingAsync();
+    }
+
+    /// <summary>
     /// Ngắt kết nối khỏi server một cách chủ động.
     /// </summary>
     public Task DisconnectAsync()
     {
         Log("Đang ngắt kết nối...", isError: false);
-        _tcpClientService.Disconnect();
+        Disconnect();
         return Task.CompletedTask;
+    }
+
+    private void Disconnect()
+    {
+        StopPingTimer();
+        _tcpClientService.Disconnect();
     }
 
     /// <summary>
@@ -175,7 +231,6 @@ public sealed class ConnectionService : IDisposable
         _pendingPingId = pingMsg.RequestId;
         _pingStopwatch.Restart();
 
-        Log("[PING] Đang gửi yêu cầu kiểm tra độ trễ...", isError: false);
         return await SendMessageAsync(pingMsg).ConfigureAwait(false);
     }
 
@@ -183,6 +238,8 @@ public sealed class ConnectionService : IDisposable
 
     /// <summary>
     /// Gửi yêu cầu tạo phòng mới lên máy chủ.
+    /// Lưu ý: KHÔNG tự gán mã phòng hay tự tạo CurrentRoom ở đây;
+    /// CurrentRoom và RoomCreated sẽ chỉ được cập nhật khi Server phản hồi ROOM_CREATED.
     /// </summary>
     public async Task<bool> CreateRoomAsync(string roomName = "")
     {
@@ -192,7 +249,6 @@ public sealed class ConnectionService : IDisposable
             return false;
         }
 
-        string generatedRoomId = Random.Shared.Next(1000, 9999).ToString();
         string finalRoomName = string.IsNullOrWhiteSpace(roomName) ? $"Phòng của {PlayerName}" : roomName.Trim();
 
         var msg = new NetworkMessage
@@ -200,29 +256,15 @@ public sealed class ConnectionService : IDisposable
             Type = MessageTypes.CreateRoom,
             Payload = new
             {
-                RoomId = generatedRoomId,
+                PlayerName = PlayerName,
+                HostName = PlayerName,
                 RoomName = finalRoomName,
-                HostName = PlayerName
+                BoardSize = 15
             }
         };
 
-        // Giả lập lưu tạm phòng cho Host trước khi server phản hồi
-        CurrentRoom = new RoomInfo
-        {
-            RoomId = generatedRoomId,
-            RoomName = finalRoomName,
-            HostPlayer = PlayerName,
-            IsHost = true,
-            MySymbol = "X"
-        };
-
-        Log($"[TẠO PHÒNG] Đang yêu cầu tạo phòng '{finalRoomName}' (Mã: {generatedRoomId})...", isError: false);
-        bool sent = await SendMessageAsync(msg).ConfigureAwait(false);
-        if (sent)
-        {
-            RoomCreated?.Invoke(CurrentRoom);
-        }
-        return sent;
+        Log($"[TẠO PHÒNG] Đang gửi yêu cầu tạo phòng '{finalRoomName}' tới máy chủ...", isError: false);
+        return await SendMessageAsync(msg).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -252,16 +294,6 @@ public sealed class ConnectionService : IDisposable
                 RoomId = cleanRoomId,
                 PlayerName = PlayerName
             }
-        };
-
-        // Cập nhật trạng thái phòng Client đang tham gia (Guest - O)
-        CurrentRoom = new RoomInfo
-        {
-            RoomId = cleanRoomId,
-            RoomName = $"Phòng #{cleanRoomId}",
-            GuestPlayer = PlayerName,
-            IsHost = false,
-            MySymbol = "O"
         };
 
         Log($"[VÀO PHÒNG] Đang gửi yêu cầu vào phòng #{cleanRoomId}...", isError: false);
@@ -315,14 +347,8 @@ public sealed class ConnectionService : IDisposable
             }
         };
 
-        CurrentRoom.IsGameStarted = true;
         Log($"[BẮT ĐẦU TRẬN ĐẤU] Gửi yêu cầu khởi động ván cờ phòng #{CurrentRoom.RoomId}...", isError: false);
-        bool sent = await SendMessageAsync(msg).ConfigureAwait(false);
-        if (sent)
-        {
-            GameStarted?.Invoke(CurrentRoom.RoomId);
-        }
-        return sent;
+        return await SendMessageAsync(msg).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -344,8 +370,40 @@ public sealed class ConnectionService : IDisposable
             }
         };
 
-        // Kích hoạt ngay sự kiện chat cho giao diện cục bộ
         ChatMessageReceived?.Invoke(PlayerName, content.Trim());
+        return await SendMessageAsync(msg).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Gửi nước đi (Move) lên máy chủ: row, col.
+    /// </summary>
+    public async Task<bool> SendMoveAsync(int row, int col)
+    {
+        if (!IsConnected)
+        {
+            Log("Chưa kết nối, không thể gửi nước đi.", isError: true);
+            return false;
+        }
+
+        if (CurrentRoom == null)
+        {
+            Log("Bạn chưa ở trong phòng nào để đánh cờ.", isError: true);
+            return false;
+        }
+
+        var msg = new NetworkMessage
+        {
+            Type = MessageTypes.Move,
+            Payload = new
+            {
+                RoomId = CurrentRoom.RoomId,
+                Row = row,
+                Col = col,
+                PlayerName = PlayerName
+            }
+        };
+
+        Log($"[ĐÁNH CỜ] Gửi nước đi ({row}, {col}) phòng #{CurrentRoom.RoomId}...", isError: false);
         return await SendMessageAsync(msg).ConfigureAwait(false);
     }
 
@@ -374,13 +432,14 @@ public sealed class ConnectionService : IDisposable
     }
 
     /// <summary>
-    /// Xử lý logic nghiệp vụ phòng và thông điệp nhận từ Server.
+    /// Xử lý logic nghiệp vụ phòng, trận đấu và thông điệp nhận từ Server.
     /// </summary>
     private void HandleIncomingMessage(NetworkMessage message)
     {
         switch (message.Type)
         {
             case MessageTypes.Pong:
+                _lastPongReceivedTime = DateTime.UtcNow;
                 _pingStopwatch.Stop();
                 long latency = _pingStopwatch.ElapsedMilliseconds;
                 PingUpdated?.Invoke(latency);
@@ -437,6 +496,46 @@ public sealed class ConnectionService : IDisposable
                 }
                 break;
 
+            case MessageTypes.MoveAccepted:
+                int acceptedRow = ExtractPropertyInt(message.Payload, "row") ?? -1;
+                int acceptedCol = ExtractPropertyInt(message.Payload, "col") ?? -1;
+                Log($"[NƯỚC ĐI HỢP LỆ] Đã chấp nhận nước đi ({acceptedRow}, {acceptedCol})", isError: false);
+                MoveAccepted?.Invoke(acceptedRow, acceptedCol);
+                break;
+
+            case MessageTypes.MoveRejected:
+                string rejectReason = ExtractPropertyString(message.Payload, "reason", "message") ?? "Nước đi không hợp lệ.";
+                Log($"[NƯỚC ĐI BỊ TỪ CHỐI] {rejectReason}", isError: true);
+                MoveRejected?.Invoke(rejectReason);
+                break;
+
+            case MessageTypes.BoardUpdated:
+                int bRow = ExtractPropertyInt(message.Payload, "row") ?? -1;
+                int bCol = ExtractPropertyInt(message.Payload, "col") ?? -1;
+                string bSymbol = ExtractPropertyString(message.Payload, "symbol", "player") ?? "";
+                string nextTurn = ExtractPropertyString(message.Payload, "currentTurn", "turn") ?? "";
+                Log($"[BÀN CỜ CẬP NHẬT] ({bRow}, {bCol}) bởi {bSymbol}. Lượt tiếp theo: {nextTurn}", isError: false);
+                BoardUpdated?.Invoke(bRow, bCol, bSymbol, nextTurn);
+                break;
+
+            case MessageTypes.GameOver:
+                string winnerSymbol = ExtractPropertyString(message.Payload, "winnerSymbol", "winner") ?? "";
+                string winnerName = ExtractPropertyString(message.Payload, "winnerName") ?? "";
+                string goReason = ExtractPropertyString(message.Payload, "reason", "message") ?? "";
+                Log($"[KẾT THÚC VÁN CỜ] Người thắng: {winnerName} ({winnerSymbol}) - {goReason}", isError: false);
+                GameOver?.Invoke(winnerSymbol, winnerName, goReason);
+                break;
+
+            case MessageTypes.OpponentLeft:
+                string opponent = ExtractPropertyString(message.Payload, "playerName", "opponent", "player") ?? "Đối thủ";
+                Log($"[ĐỐI THỦ RỜI TRẬN] {opponent} đã rời phòng chơi.", isError: false);
+                if (CurrentRoom != null && CurrentRoom.GuestPlayer == opponent)
+                {
+                    CurrentRoom.GuestPlayer = null;
+                }
+                OpponentLeft?.Invoke(opponent);
+                break;
+
             case MessageTypes.Error:
                 string errMsg = ExtractPropertyString(message.Payload, "message", "error") ?? "Lỗi từ server.";
                 Log($"[MÁY CHỦ BÁO LỖI] {errMsg}", isError: true);
@@ -446,9 +545,10 @@ public sealed class ConnectionService : IDisposable
 
     private void HandleRoomCreatedMessage(NetworkMessage message)
     {
-        string roomId = ExtractPropertyString(message.Payload, "roomId", "id") ?? CurrentRoom?.RoomId ?? "101";
-        string roomName = ExtractPropertyString(message.Payload, "roomName", "name") ?? CurrentRoom?.RoomName ?? $"Phòng #{roomId}";
-        string host = ExtractPropertyString(message.Payload, "hostName", "host") ?? PlayerName;
+        // Lấy mã phòng chính xác do Server cấp
+        string roomId = ExtractPropertyString(message.Payload, "roomId", "id") ?? "";
+        string roomName = ExtractPropertyString(message.Payload, "roomName", "name") ?? $"Phòng #{roomId}";
+        string host = ExtractPropertyString(message.Payload, "hostName", "host", "playerX", "playerName") ?? PlayerName;
 
         CurrentRoom = new RoomInfo
         {
@@ -459,15 +559,15 @@ public sealed class ConnectionService : IDisposable
             MySymbol = (host == PlayerName) ? "X" : "O"
         };
 
-        Log($"[PHÒNG ĐÃ TẠO] Phòng #{roomId} ({roomName}) do {host} làm chủ phòng.", isError: false);
+        Log($"[PHÒNG ĐÃ TẠO] Server xác nhận phòng #{roomId} ({roomName}) do {host} làm chủ phòng.", isError: false);
         RoomCreated?.Invoke(CurrentRoom);
     }
 
     private void HandleRoomJoinedMessage(NetworkMessage message)
     {
         string roomId = ExtractPropertyString(message.Payload, "roomId", "id") ?? CurrentRoom?.RoomId ?? "";
-        string host = ExtractPropertyString(message.Payload, "hostName", "host") ?? (CurrentRoom?.IsHost == true ? PlayerName : "Chủ phòng");
-        string guest = ExtractPropertyString(message.Payload, "guestName", "guest", "playerName") ?? (CurrentRoom?.IsHost == false ? PlayerName : "Người chơi 2");
+        string host = ExtractPropertyString(message.Payload, "hostName", "host", "playerX") ?? (CurrentRoom?.IsHost == true ? PlayerName : "Chủ phòng");
+        string guest = ExtractPropertyString(message.Payload, "guestName", "guest", "playerO", "playerName") ?? (CurrentRoom?.IsHost == false ? PlayerName : "Người chơi 2");
 
         if (CurrentRoom == null)
         {
@@ -499,9 +599,6 @@ public sealed class ConnectionService : IDisposable
         PlayerJoinedRoom?.Invoke(roomId, guest);
     }
 
-    /// <summary>
-    /// Trích xuất giá trị chuỗi từ Payload linh hoạt (JsonElement hoặc object).
-    /// </summary>
     private static string? ExtractPropertyString(object? payload, params string[] propertyNames)
     {
         if (payload is null) return null;
@@ -542,8 +639,55 @@ public sealed class ConnectionService : IDisposable
         return null;
     }
 
+    private static int? ExtractPropertyInt(object? payload, params string[] propertyNames)
+    {
+        if (payload is null) return null;
+
+        if (payload is JsonElement element && element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var propName in propertyNames)
+            {
+                foreach (var prop in element.EnumerateObject())
+                {
+                    if (string.Equals(prop.Name, propName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt32(out int val))
+                            return val;
+                        if (prop.Value.ValueKind == JsonValueKind.String && int.TryParse(prop.Value.GetString(), out int parsed))
+                            return parsed;
+                    }
+                }
+            }
+        }
+        else
+        {
+            try
+            {
+                string json = JsonSerializer.Serialize(payload);
+                using var doc = JsonDocument.Parse(json);
+                foreach (var propName in propertyNames)
+                {
+                    foreach (var prop in doc.RootElement.EnumerateObject())
+                    {
+                        if (string.Equals(prop.Name, propName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt32(out int val))
+                                return val;
+                            if (prop.Value.ValueKind == JsonValueKind.String && int.TryParse(prop.Value.GetString(), out int parsed))
+                                return parsed;
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        return null;
+    }
+
     private void OnDisconnected()
     {
+        StopPingTimer();
         Log("Đã ngắt kết nối với máy chủ.", isError: false);
         CurrentRoom = null;
         ConnectionStateChanged?.Invoke(false, "Đã ngắt kết nối");
@@ -563,6 +707,7 @@ public sealed class ConnectionService : IDisposable
     {
         if (_isDisposed) return;
         _isDisposed = true;
+        StopPingTimer();
         _tcpClientService.Dispose();
     }
 }
