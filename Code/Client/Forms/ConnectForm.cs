@@ -22,7 +22,7 @@ public sealed class ConnectForm : Form
 
     private readonly ConnectionService? _connectionService;
 
-    public ConnectForm(ConnectionService? connectionService = null, string defaultHost = "127.0.0.1", int defaultPort = 8888, string defaultName = "Player1")
+    public ConnectForm(ConnectionService? connectionService = null, string defaultHost = "127.0.0.1", int defaultPort = 5000, string defaultName = "Player1")
     {
         _connectionService = connectionService;
 
@@ -103,7 +103,7 @@ public sealed class ConnectForm : Form
         _numPort.Size = new Size(120, 26);
         _numPort.Minimum = 1;
         _numPort.Maximum = 65535;
-        _numPort.Value = defaultPort is >= 1 and <= 65535 ? defaultPort : 8888;
+        _numPort.Value = defaultPort is >= 1 and <= 65535 ? defaultPort : 5000;
 
         // Player Name
         var lblName = new Label
