@@ -1,4 +1,5 @@
-﻿//tv6
+
+// TV6
 using System;
 
 namespace Caro.Server.Validation;
@@ -20,10 +21,21 @@ public static class RequestValidator
             return false;
         }
 
-        if (content.Trim().Length > MaxChatLength)
+        string trimmed = content.Trim();
+
+        if (trimmed.Length > MaxChatLength)
         {
             error = "Tin nhan khong duoc vuot qua 500 ky tu.";
             return false;
+        }
+
+        foreach (char c in trimmed)
+        {
+            if (char.IsControl(c))
+            {
+                error = "Tin nhan chua ky tu khong hop le.";
+                return false;
+            }
         }
 
         return true;
