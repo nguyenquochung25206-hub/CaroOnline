@@ -26,7 +26,8 @@ public sealed class ChatControl : UserControl
         messageInput = new TextBox
         {
             Dock = DockStyle.Fill,
-            PlaceholderText = "Nhập tin nhắn..."
+            PlaceholderText = "Nhập tin nhắn...",
+            MaxLength = 500
         };
 
         sendButton = new Button
