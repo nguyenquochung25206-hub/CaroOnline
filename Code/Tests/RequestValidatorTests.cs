@@ -1,4 +1,4 @@
-﻿
+
 using System;
 using Xunit;
 using Caro.Server.Validation;
@@ -93,6 +93,39 @@ public class RequestValidatorTests
     {
         bool result = RequestValidator.ValidateRoomId(
             "   ", out string error);
+
+        Assert.False(result);
+        Assert.NotEmpty(error);
+    }
+
+    // TEST 9: Tin nhan null
+    [Fact]
+    public void Chat_Null_ReturnsFalse()
+    {
+        bool result = RequestValidator.ValidateChat(
+            null, out string error);
+
+        Assert.False(result);
+        Assert.NotEmpty(error);
+    }
+
+    // TEST 10: Tin nhan chua ky tu dieu khien
+    [Fact]
+    public void Chat_ControlCharacter_ReturnsFalse()
+    {
+        bool result = RequestValidator.ValidateChat(
+            "Xin\u0001chao", out string error);
+
+        Assert.False(result);
+        Assert.NotEmpty(error);
+    }
+
+    // TEST 11: Ma phong null
+    [Fact]
+    public void RoomId_Null_ReturnsFalse()
+    {
+        bool result = RequestValidator.ValidateRoomId(
+            null, out string error);
 
         Assert.False(result);
         Assert.NotEmpty(error);
