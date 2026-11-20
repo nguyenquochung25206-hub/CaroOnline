@@ -1,81 +1,208 @@
-// TODO TV4: Trạng thái bàn cờ; thống nhất kích thước và quy ước ô trống.
-namespace CaroGame.Shared.Game
+// TODO TV4: Vẽ bàn cờ, phát sự kiện ô được chọn, cập nhật X/O.
+using System;
+using System.Drawing;
+using System.Windows.Forms;
+using CaroGame.Shared.Game;
+
+namespace CaroGame.Client.Controls
 {
-    public sealed class BoardState
+    /// <summary>
+    /// Điều khiển vẽ bàn cờ và nhận thao tác chọn ô của người chơi.
+    /// LocalMode = true: tự xử lý lượt và kết quả trên máy hiện tại.
+    /// LocalMode = false: chỉ gửi nước đi; bàn cờ chờ dữ liệu từ Server.
+    /// </summary>
+    public class BoardControl : UserControl
     {
-        private readonly Player[,] cells;
+        private readonly BoardState board;
+        private Player currentPlayer = Player.X;
+        private GameResult gameResult = GameResult.Ongoing;
+        private bool onlineGameFinished;
 
-        public int Rows { get; private set; }
-        public int Cols { get; private set; }
+        public bool LocalMode { get; set; } = true;
 
-        public BoardState(int rows = 15, int cols = 15)
+        // Quân của người đang sử dụng cửa sổ này khi chơi online.
+        public Player MySymbol { get; set; } = Player.X;
+
+        // GameForm cập nhật thuộc tính này dựa trên currentTurn Server gửi về.
+        public bool IsMyTurn { get; private set; } = true;
+
+        // Báo cho GameForm biết người chơi vừa chọn một ô.
+        public event Action<Move>? MovePlayed;
+
+        public BoardControl()
         {
-            if (rows <= 0)
-                throw new System.ArgumentOutOfRangeException(nameof(rows));
-
-            if (cols <= 0)
-                throw new System.ArgumentOutOfRangeException(nameof(cols));
-
-            Rows = rows;
-            Cols = cols;
-
-            cells = new Player[rows, cols];
-            Reset();
+            board = new BoardState(15, 15);
+            Size = new Size(600, 600);
+            BackColor = Color.Bisque;
+            DoubleBuffered = true;
         }
 
-        public bool IsInside(int row, int col)
+        protected override void OnPaint(PaintEventArgs e)
         {
-            return row >= 0 && row < Rows
-                && col >= 0 && col < Cols;
-        }
+            base.OnPaint(e);
 
-        public Player GetCell(int row, int col)
-        {
-            if (!IsInside(row, col))
-                throw new System.ArgumentOutOfRangeException(
-                    "Tọa độ nằm ngoài bàn cờ.");
+            Graphics g = e.Graphics;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
-            return cells[row, col];
-        }
+            int margin = 25;
+            float cellWidth = (Width - margin * 2) / (float)(board.Cols - 1);
+            float cellHeight = (Height - margin * 2) / (float)(board.Rows - 1);
 
-        public bool TryPlaceMove(Move move)
-        {
-            if (move == null)
-                return false;
-
-            if (!IsInside(move.Row, move.Col))
-                return false;
-
-            if (cells[move.Row, move.Col] != Player.None)
-                return false;
-
-            cells[move.Row, move.Col] = move.Player;
-            return true;
-        }
-
-        public bool IsFull()
-        {
-            for (int row = 0; row < Rows; row++)
+            using (Pen gridPen = new Pen(Color.SaddleBrown, 1))
             {
-                for (int col = 0; col < Cols; col++)
+                for (int row = 0; row < board.Rows; row++)
                 {
-                    if (cells[row, col] == Player.None)
-                        return false;
+                    float y = margin + row * cellHeight;
+                    g.DrawLine(gridPen, margin, y, Width - margin, y);
+                }
+
+                for (int col = 0; col < board.Cols; col++)
+                {
+                    float x = margin + col * cellWidth;
+                    g.DrawLine(gridPen, x, margin, x, Height - margin);
                 }
             }
 
+            for (int row = 0; row < board.Rows; row++)
+            {
+                for (int col = 0; col < board.Cols; col++)
+                {
+                    Player player = board.GetCell(row, col);
+                    if (player == Player.None) continue;
+
+                    float centerX = margin + col * cellWidth;
+                    float centerY = margin + row * cellHeight;
+                    float radius = Math.Min(cellWidth, cellHeight) * 0.32f;
+                    Color pieceColor = player == Player.X ? Color.Blue : Color.Red;
+
+                    using (Pen piecePen = new Pen(pieceColor, 2.5f))
+                    {
+                        if (player == Player.X)
+                        {
+                            g.DrawLine(piecePen, centerX - radius, centerY - radius,
+                                centerX + radius, centerY + radius);
+                            g.DrawLine(piecePen, centerX - radius, centerY + radius,
+                                centerX + radius, centerY - radius);
+                        }
+                        else
+                        {
+                            g.DrawEllipse(piecePen, centerX - radius, centerY - radius,
+                                radius * 2, radius * 2);
+                        }
+                    }
+                }
+            }
+        }
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            base.OnMouseClick(e);
+
+            if (e.Button != MouseButtons.Left) return;
+            if (LocalMode && gameResult != GameResult.Ongoing) return;
+            if (!LocalMode && (onlineGameFinished || !IsMyTurn)) return;
+
+            int margin = 25;
+            float cellWidth = (Width - margin * 2) / (float)(board.Cols - 1);
+            float cellHeight = (Height - margin * 2) / (float)(board.Rows - 1);
+
+            int col = (int)Math.Round((e.X - margin) / cellWidth);
+            int row = (int)Math.Round((e.Y - margin) / cellHeight);
+
+            if (!board.IsInside(row, col)) return;
+
+            float centerX = margin + col * cellWidth;
+            float centerY = margin + row * cellHeight;
+            if (Math.Abs(e.X - centerX) > cellWidth * 0.4f ||
+                Math.Abs(e.Y - centerY) > cellHeight * 0.4f)
+                return;
+
+            // Không cho chọn ô đã có quân, kể cả khi đang chơi online.
+            if (board.GetCell(row, col) != Player.None) return;
+
+            Player symbol = LocalMode ? currentPlayer : MySymbol;
+            Move move = new Move(row, col, symbol);
+
+            if (LocalMode)
+            {
+                if (!board.TryPlaceMove(move)) return;
+
+                gameResult = WinChecker.Check(board, move);
+                MovePlayed?.Invoke(move);
+
+                if (gameResult == GameResult.Ongoing)
+                {
+                    currentPlayer = currentPlayer == Player.X ? Player.O : Player.X;
+                }
+
+                Invalidate();
+                ShowLocalResultIfFinished();
+            }
+            else
+            {
+                // Online: KHÔNG đặt quân tại đây và KHÔNG tự đổi lượt.
+                // Chờ BOARD_UPDATED từ Server để gọi ApplyRemoteMove().
+                IsMyTurn = false;
+                MovePlayed?.Invoke(move);
+                Invalidate();
+            }
+        }
+
+        /// <summary>
+        /// Áp dụng một nước đi do Server gửi về.
+        /// Không tự kiểm tra thắng/thua ở chế độ online; GAME_OVER từ Server là kết quả chính thức.
+        /// </summary>
+        public bool ApplyRemoteMove(Move move)
+        {
+            if (move == null || onlineGameFinished) return false;
+            if (!board.TryPlaceMove(move)) return false;
+
+            currentPlayer = move.Player == Player.X ? Player.O : Player.X;
+            Invalidate();
             return true;
         }
 
-        public void Reset()
+        public void SetOnlineTurn(bool isMyTurn)
         {
-            for (int row = 0; row < Rows; row++)
+            IsMyTurn = isMyTurn && !onlineGameFinished;
+        }
+
+        public void FinishOnlineGame()
+        {
+            onlineGameFinished = true;
+            IsMyTurn = false;
+            Invalidate();
+        }
+
+        public void ResetBoard()
+        {
+            board.Reset();
+            currentPlayer = Player.X;
+            gameResult = GameResult.Ongoing;
+            onlineGameFinished = false;
+            IsMyTurn = true;
+            Invalidate();
+        }
+
+        private void ShowLocalResultIfFinished()
+        {
+            if (gameResult == GameResult.Ongoing) return;
+
+            string message;
+            switch (gameResult)
             {
-                for (int col = 0; col < Cols; col++)
-                {
-                    cells[row, col] = Player.None;
-                }
+                case GameResult.XWins:
+                    message = "Người chơi X chiến thắng!";
+                    break;
+                case GameResult.OWins:
+                    message = "Người chơi O chiến thắng!";
+                    break;
+                default:
+                    message = "Ván đấu hòa!";
+                    break;
             }
+
+            MessageBox.Show(message, "Kết quả",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }
 }
