@@ -6,9 +6,10 @@ using Caro.Shared.Messages;
 namespace Caro.Client.Forms;
 
 /// <summary>
-/// Giao diện chính của Caro Client - Trách nhiệm TV3:
-/// Quản lý cấu hình IP/Port, kết nối/ngắt kết nối tới Server, đo độ trễ Ping/Pong,
-/// tích hợp Sảnh chờ (LobbyForm), tạo phòng, tham gia phòng và hiển thị bảng Log giao thức.
+/// Giao diện chính của Caro Client - Trách nhiệm TV3 (Tuần 1, 2, 3, 4):
+/// Quản lý cấu hình IP/Port, kết nối/ngắt kết nối tới Server, hỗ trợ Kết nối lại (Reconnect),
+/// đo độ trễ Ping/Pong, tích hợp Sảnh chờ (LobbyForm), tạo phòng, tham gia phòng,
+/// bắt lỗi mạng và hiển thị bảng Log giao thức mạng hoàn chỉnh.
 /// </summary>
 public sealed class MainForm : Form
 {
@@ -21,6 +22,7 @@ public sealed class MainForm : Form
     private readonly TextBox _txtName = new();
     private readonly Button _btnConnect = new();
     private readonly Button _btnDisconnect = new();
+    private readonly Button _btnReconnect = new();
     private readonly Button _btnPing = new();
     private readonly Button _btnOpenConnectDialog = new();
 
@@ -28,7 +30,7 @@ public sealed class MainForm : Form
     private readonly Panel _pnlStatusIndicator = new();
     private readonly Label _lblStatusText = new();
 
-    // Controls tương tác phòng / game (Nhiệm vụ TV3 - Tuần 2)
+    // Controls tương tác phòng / game (Nhiệm vụ TV3)
     private readonly GroupBox _grpActions = new();
     private readonly Button _btnCreateRoom = new();
     private readonly Button _btnJoinRoom = new();
@@ -48,21 +50,34 @@ public sealed class MainForm : Form
     private readonly ToolStripStatusLabel _pingLabel = new();
     private readonly ToolStripStatusLabel _playerLabel = new();
 
+    public ConnectionService ConnectionService => _connectionService;
+
     public MainForm()
     {
         _connectionService = new ConnectionService();
 
         InitializeComponent();
+        LoadSavedSettings();
         RegisterEvents();
         UpdateUIState(false);
     }
 
+    private void LoadSavedSettings()
+    {
+        var config = ConnectionService.LoadConfig();
+        _txtHost.Text = config.LastHost;
+        _numPort.Value = config.LastPort is >= 1 and <= 65535 ? config.LastPort : 5000;
+        _txtName.Text = string.IsNullOrWhiteSpace(config.LastPlayerName)
+            ? "Player_" + Random.Shared.Next(100, 999)
+            : config.LastPlayerName;
+    }
+
     private void InitializeComponent()
     {
-        Text = "Caro Online Client — v2.0 [Tuần 2: Sảnh & Phòng Đấu]";
-        Width = 980;
-        Height = 700;
-        MinimumSize = new Size(820, 580);
+        Text = "Caro Online Client — v4.0 [Bản Hoàn Thiện & Bảo Vệ]";
+        Width = 1040;
+        Height = 720;
+        MinimumSize = new Size(880, 600);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9f, FontStyle.Regular);
         BackColor = Color.FromArgb(240, 242, 245);
@@ -99,25 +114,24 @@ public sealed class MainForm : Form
         // Dòng nhập liệu IP, Port, Tên
         var lblHost = new Label { Text = "IP / Host:", AutoSize = true, Location = new Point(14, 45), Font = new Font("Segoe UI", 9f, FontStyle.Bold) };
         _txtHost.Text = "127.0.0.1";
-        _txtHost.Size = new Size(130, 25);
-        _txtHost.Location = new Point(80, 42);
+        _txtHost.Size = new Size(120, 25);
+        _txtHost.Location = new Point(78, 42);
 
-        var lblPort = new Label { Text = "Port:", AutoSize = true, Location = new Point(220, 45), Font = new Font("Segoe UI", 9f, FontStyle.Bold) };
+        var lblPort = new Label { Text = "Port:", AutoSize = true, Location = new Point(208, 45), Font = new Font("Segoe UI", 9f, FontStyle.Bold) };
         _numPort.Minimum = 1;
         _numPort.Maximum = 65535;
         _numPort.Value = 5000;
-        _numPort.Size = new Size(80, 25);
-        _numPort.Location = new Point(260, 42);
+        _numPort.Size = new Size(75, 25);
+        _numPort.Location = new Point(245, 42);
 
-        var lblName = new Label { Text = "Tên:", AutoSize = true, Location = new Point(350, 45), Font = new Font("Segoe UI", 9f, FontStyle.Bold) };
-        _txtName.Text = "Player_" + Random.Shared.Next(100, 999);
+        var lblName = new Label { Text = "Tên:", AutoSize = true, Location = new Point(330, 45), Font = new Font("Segoe UI", 9f, FontStyle.Bold) };
         _txtName.Size = new Size(110, 25);
-        _txtName.Location = new Point(385, 42);
+        _txtName.Location = new Point(365, 42);
 
         // Các nút bấm kết nối
         _btnConnect.Text = "Kết nối";
-        _btnConnect.Location = new Point(510, 40);
-        _btnConnect.Size = new Size(95, 30);
+        _btnConnect.Location = new Point(485, 40);
+        _btnConnect.Size = new Size(85, 30);
         _btnConnect.BackColor = Color.FromArgb(13, 110, 253);
         _btnConnect.ForeColor = Color.White;
         _btnConnect.FlatStyle = FlatStyle.Flat;
@@ -126,9 +140,9 @@ public sealed class MainForm : Form
         _btnConnect.Cursor = Cursors.Hand;
         _btnConnect.Click += OnConnectClicked;
 
-        _btnDisconnect.Text = "Ngắt kết nối";
-        _btnDisconnect.Location = new Point(615, 40);
-        _btnDisconnect.Size = new Size(100, 30);
+        _btnDisconnect.Text = "Ngắt";
+        _btnDisconnect.Location = new Point(575, 40);
+        _btnDisconnect.Size = new Size(65, 30);
         _btnDisconnect.BackColor = Color.FromArgb(220, 53, 69);
         _btnDisconnect.ForeColor = Color.White;
         _btnDisconnect.FlatStyle = FlatStyle.Flat;
@@ -137,9 +151,20 @@ public sealed class MainForm : Form
         _btnDisconnect.Cursor = Cursors.Hand;
         _btnDisconnect.Click += OnDisconnectClicked;
 
-        _btnPing.Text = "Gửi Ping";
-        _btnPing.Location = new Point(725, 40);
-        _btnPing.Size = new Size(85, 30);
+        _btnReconnect.Text = "Kết nối lại";
+        _btnReconnect.Location = new Point(645, 40);
+        _btnReconnect.Size = new Size(85, 30);
+        _btnReconnect.BackColor = Color.FromArgb(255, 159, 28);
+        _btnReconnect.ForeColor = Color.White;
+        _btnReconnect.FlatStyle = FlatStyle.Flat;
+        _btnReconnect.FlatAppearance.BorderSize = 0;
+        _btnReconnect.Font = new Font("Segoe UI", 8.5f, FontStyle.Bold);
+        _btnReconnect.Cursor = Cursors.Hand;
+        _btnReconnect.Click += OnReconnectClicked;
+
+        _btnPing.Text = "Ping";
+        _btnPing.Location = new Point(735, 40);
+        _btnPing.Size = new Size(65, 30);
         _btnPing.BackColor = Color.FromArgb(108, 117, 125);
         _btnPing.ForeColor = Color.White;
         _btnPing.FlatStyle = FlatStyle.Flat;
@@ -148,8 +173,8 @@ public sealed class MainForm : Form
         _btnPing.Click += OnPingClicked;
 
         _btnOpenConnectDialog.Text = "Cửa sổ kết nối...";
-        _btnOpenConnectDialog.Location = new Point(820, 40);
-        _btnOpenConnectDialog.Size = new Size(125, 30);
+        _btnOpenConnectDialog.Location = new Point(805, 40);
+        _btnOpenConnectDialog.Size = new Size(130, 30);
         _btnOpenConnectDialog.BackColor = Color.FromArgb(230, 235, 240);
         _btnOpenConnectDialog.FlatStyle = FlatStyle.Flat;
         _btnOpenConnectDialog.FlatAppearance.BorderColor = Color.FromArgb(180, 190, 205);
@@ -159,7 +184,7 @@ public sealed class MainForm : Form
         pnlTop.Controls.AddRange([
             lblAppTitle, _pnlStatusIndicator, _lblStatusText,
             lblHost, _txtHost, lblPort, _numPort, lblName, _txtName,
-            _btnConnect, _btnDisconnect, _btnPing, _btnOpenConnectDialog
+            _btnConnect, _btnDisconnect, _btnReconnect, _btnPing, _btnOpenConnectDialog
         ]);
 
         // 2. Khu vực chính giữa (Chia làm 2 phần: Chức năng phòng & Log giao thức)
@@ -169,8 +194,8 @@ public sealed class MainForm : Form
             Padding = new Padding(12)
         };
 
-        // Group phòng chơi (Nhiệm vụ TV3 - Tuần 2)
-        _grpActions.Text = "Sảnh Chờ & Phòng Đấu (Room Lobby - Tuần 2)";
+        // Group phòng chơi (Nhiệm vụ TV3)
+        _grpActions.Text = "Sảnh Chờ & Phòng Đấu (Room Lobby)";
         _grpActions.Dock = DockStyle.Top;
         _grpActions.Height = 85;
         _grpActions.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
@@ -286,11 +311,13 @@ public sealed class MainForm : Form
     private void RegisterEvents()
     {
         _connectionService.ConnectionStateChanged += OnConnectionStateChanged;
+        _connectionService.ConnectionLost += OnConnectionLost;
+        _connectionService.ServerErrorReported += OnServerErrorReported;
         _connectionService.LogGenerated += OnLogGenerated;
         _connectionService.PingUpdated += OnPingUpdated;
         _connectionService.MessageReceived += OnMessageReceived;
 
-        // Đăng ký sự kiện phòng chơi (Tuần 2)
+        // Đăng ký sự kiện phòng chơi
         _connectionService.RoomCreated += OnRoomCreated;
         _connectionService.RoomJoined += OnRoomJoined;
         _connectionService.JoinRoomFailed += OnJoinRoomFailed;
@@ -318,12 +345,29 @@ public sealed class MainForm : Form
         {
             _btnConnect.Enabled = true;
             _btnConnect.Text = "Kết nối";
+            MessageBox.Show($"Không thể kết nối tới server {host}:{port}.\nLý do: {_connectionService.LastError ?? "Server chưa bật hoặc sai cổng."}",
+                "Lỗi kết nối", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
     private async void OnDisconnectClicked(object? sender, EventArgs e)
     {
         await _connectionService.DisconnectAsync();
+    }
+
+    private async void OnReconnectClicked(object? sender, EventArgs e)
+    {
+        _btnReconnect.Enabled = false;
+        _btnReconnect.Text = "Đang kết nối...";
+
+        bool success = await _connectionService.ReconnectAsync();
+        _btnReconnect.Enabled = true;
+        _btnReconnect.Text = "Kết nối lại";
+
+        if (!success)
+        {
+            MessageBox.Show("Kết nối lại thất bại. Vui lòng kiểm tra Server và thử lại.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private async void OnPingClicked(object? sender, EventArgs e)
@@ -410,6 +454,32 @@ public sealed class MainForm : Form
         _statusLabel.Text = $"Trạng thái: {status}";
     }
 
+    private void OnConnectionLost(string reason)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => OnConnectionLost(reason));
+            return;
+        }
+
+        _roomStatusLabel.Text = "Phòng: Chưa vào";
+        AppendLog($"[MẤT KẾT NỐI] {reason}", Color.FromArgb(255, 99, 71));
+
+        MessageBox.Show($"Mất kết nối với máy chủ!\nLý do: {reason}\nVui lòng kiểm tra mạng và bấm 'Kết nối lại'.",
+            "Mất kết nối mạng", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    }
+
+    private void OnServerErrorReported(string error)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => OnServerErrorReported(error));
+            return;
+        }
+
+        AppendLog($"[LỖI TỪ MÁY CHỦ] {error}", Color.FromArgb(255, 99, 71));
+    }
+
     private void OnPingUpdated(long latency)
     {
         if (InvokeRequired)
@@ -429,7 +499,6 @@ public sealed class MainForm : Form
             return;
         }
 
-        // Thông báo phản hồi nếu nhận WELCOME
         if (message.Type == MessageTypes.Welcome)
         {
             AppendLog($"[HỆ THỐNG] Máy chủ đã chào đón người chơi {_connectionService.PlayerName}!", Color.FromArgb(75, 181, 67));
@@ -529,6 +598,7 @@ public sealed class MainForm : Form
         _btnConnect.Enabled = !isConnected;
         _btnConnect.Text = "Kết nối";
         _btnDisconnect.Enabled = isConnected;
+        _btnReconnect.Enabled = !isConnected;
         _btnPing.Enabled = isConnected;
         _txtHost.Enabled = !isConnected;
         _numPort.Enabled = !isConnected;
@@ -544,4 +614,16 @@ public sealed class MainForm : Form
             _roomStatusLabel.Text = "Phòng: Chưa vào";
         }
     }
+
+    #region Helper Methods for Unit Testing
+
+    public void TriggerConnect() => OnConnectClicked(_btnConnect, EventArgs.Empty);
+
+    public void TriggerDisconnect() => OnDisconnectClicked(_btnDisconnect, EventArgs.Empty);
+
+    public void SetHost(string host) => _txtHost.Text = host;
+
+    public void SetPort(int port) => _numPort.Value = Math.Clamp(port, 1, 65535);
+
+    #endregion
 }
