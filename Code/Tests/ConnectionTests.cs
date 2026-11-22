@@ -65,4 +65,35 @@ public class ConnectionTests
         Assert.True(count > 0);
         Assert.StartsWith("HELLO", Encoding.UTF8.GetString(buffer, 0, count));
     }
+    
+    // TEST 5: Server phát hiện Client ngắt kết nối
+    [Fact]
+    public async Task Server_Detects_Client_Disconnection()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        using var accepted = await listener.AcceptTcpClientAsync()
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Client chủ động đóng kết nối
+        client.Close();
+
+        // Server đọc dữ liệu và nhận 0 byte khi Client ngắt
+        byte[] buffer = new byte[64];
+
+        int count = await accepted.GetStream()
+            .ReadAsync(buffer)
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, count);
+    }
+
 }

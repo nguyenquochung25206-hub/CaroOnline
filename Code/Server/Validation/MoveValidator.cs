@@ -1,49 +1,53 @@
-using Caro.Shared.Game;
-namespace Caro.Server.Validation;
-// TODO TV5: Server xác minh đúng phòng, đúng lượt, trong biên, ô trống.
-public static class MoveValidator
+using CaroGame.Shared.Game;
+
+namespace Caro.Server.Validation
 {
-    public static bool IsValid(BoardState board, Move move, out string error)
-    { error = "Chưa triển khai"; return false; }
-             // 1. Kiem tra ban co
+    public static class MoveValidator
+    {
+        public static bool IsValid(
+            BoardState board,
+            Move move,
+            out string error)
+        {
+            error = string.Empty;
+
+            // 1. Kiểm tra bàn cờ
             if (board == null)
             {
                 error = "Ban co khong ton tai.";
                 return false;
             }
 
-            // 2. Kiem tra nuoc di
+            // 2. Kiểm tra nước đi
             if (move == null)
             {
                 error = "Nuoc di khong hop le.";
                 return false;
             }
 
-            // 3. Kiem tra ma nguoi choi
-            if (string.IsNullOrWhiteSpace(move.PlayerId))
+            // 3. Kiểm tra người chơi
+            if (move.Player != Player.X &&
+                move.Player != Player.O)
             {
-                error = "Ma nguoi choi khong hop le.";
+                error = "Nguoi choi khong hop le.";
                 return false;
             }
 
-            // 4. Kiem tra toa do nam trong ban co
-            if (move.Row < 0 || move.Row >= BoardState.Size ||
-                move.Col < 0 || move.Col >= BoardState.Size)
+            // 4. Kiểm tra tọa độ
+            if (!board.IsInside(move.Row, move.Col))
             {
                 error = "Toa do nam ngoai ban co.";
                 return false;
             }
 
-            // 5. Kiem tra o da co quan hay chua
-            if (board.Cells[move.Row, move.Col] != null)
+            // 5. Kiểm tra ô đã có quân chưa
+            if (board.GetCell(move.Row, move.Col) != Player.None)
             {
                 error = "O nay da co quan.";
                 return false;
             }
 
-            // Tat ca dieu kien deu hop le
             return true;
         }
     }
-}   
 }

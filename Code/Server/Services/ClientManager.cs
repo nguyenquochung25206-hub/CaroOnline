@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text;
+using Caro.Server.Logging;
 using Caro.Server.Networking;
 using Caro.Shared.Messages;
 using Caro.Shared.Protocol;
@@ -42,7 +43,7 @@ public sealed class ClientManager
             return;
 
         // Ghi log so luong Client sau khi them.
-        Console.WriteLine(
+        ServerLogger.Info(
             $"[CLIENT] Added {session.RemoteAddress}. " +
             $"Total clients: {ClientCount}");
     }
@@ -57,7 +58,7 @@ public sealed class ClientManager
             return;
 
         // Ghi log so luong Client sau khi xoa.
-        Console.WriteLine(
+        ServerLogger.Info(
             $"[CLIENT] Removed {session.RemoteAddress}. " +
             $"Total clients: {ClientCount}");
 
@@ -223,8 +224,7 @@ public sealed class ClientManager
             }
             catch (Exception ex)
             {
-                Console.WriteLine(
-                    $"[CLIENT] Disconnect handler error: {ex.Message}");
+                ServerLogger.Error("[CLIENT] Disconnect handler error", ex);
             }
         }
     }
