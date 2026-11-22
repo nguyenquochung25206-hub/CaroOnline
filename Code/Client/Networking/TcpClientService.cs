@@ -5,7 +5,20 @@ using System.Text;
 namespace Caro.Client.Networking;
 
 /// <summary>
-/// Quản lý kết nối TCP Socket cấp thấp: kết nối, ngắt kết nối, gửi/nhận dữ liệu dạng newline-delimited string bất đồng bộ.
+/// Trạng thái kết nối TCP của Client.
+/// </summary>
+public enum ConnectionState
+{
+    Disconnected,
+    Connecting,
+    Connected,
+    Disconnecting
+}
+
+/// <summary>
+/// Quản lý kết nối TCP Socket cấp thấp (Nhiệm vụ TV3 - Tuần 1, 3):
+/// Quản lý kết nối/ngắt kết nối, gửi/nhận dữ liệu dạng newline-delimited JSON string bất đồng bộ,
+/// xử lý timeout, phát hiện rớt mạng đột ngột và giải phóng tài nguyên an toàn.
 /// </summary>
 public sealed class TcpClientService : IDisposable, IAsyncDisposable
 {
@@ -16,16 +29,30 @@ public sealed class TcpClientService : IDisposable, IAsyncDisposable
     private CancellationTokenSource? _cts;
     private Task? _receiveTask;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private readonly object _disconnectLock = new();
     private bool _isDisposed;
 
     public event Action<string>? MessageReceived;
     public event Action? Disconnected;
+    public event Action<string?>? DisconnectedWithReason;
     public event Action<Exception>? ErrorOccurred;
+    public event Action<ConnectionState>? StateChanged;
 
-    public bool IsConnected => _tcpClient is { Connected: true } && !_isDisposed;
+    public ConnectionState State { get; private set; } = ConnectionState.Disconnected;
+    public bool IsConnected => State == ConnectionState.Connected && _tcpClient is { Connected: true } && !_isDisposed;
+    public string? LastDisconnectReason { get; private set; }
+
+    private void SetState(ConnectionState newState)
+    {
+        if (State != newState)
+        {
+            State = newState;
+            StateChanged?.Invoke(newState);
+        }
+    }
 
     /// <summary>
-    /// Kết nối tới TCP server với timeout xác định.
+    /// Kết nối tới TCP server với timeout xác định (mặc định 5000ms).
     /// </summary>
     public async Task ConnectAsync(string host, int port, int timeoutMilliseconds = 5000, CancellationToken cancellationToken = default)
     {
@@ -35,6 +62,7 @@ public sealed class TcpClientService : IDisposable, IAsyncDisposable
         }
 
         Cleanup();
+        SetState(ConnectionState.Connecting);
 
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _tcpClient = new TcpClient
@@ -57,24 +85,28 @@ public sealed class TcpClientService : IDisposable, IAsyncDisposable
                 AutoFlush = true
             };
 
+            SetState(ConnectionState.Connected);
+
             // Bắt đầu vòng lặp đọc dữ liệu nền
             _receiveTask = Task.Run(() => ReceiveLoopAsync(_cts.Token), CancellationToken.None);
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
         {
             Cleanup();
+            SetState(ConnectionState.Disconnected);
             throw new TimeoutException($"Hết thời gian chờ kết nối tới {host}:{port} ({timeoutMilliseconds}ms).");
         }
         catch (Exception ex)
         {
             Cleanup();
+            SetState(ConnectionState.Disconnected);
             ErrorOccurred?.Invoke(ex);
             throw;
         }
     }
 
     /// <summary>
-    /// Gửi một dòng văn bản (kết thúc bằng newline) tới server.
+    /// Gửi một dòng văn bản (kết thúc bằng newline) tới server với timeout an toàn.
     /// </summary>
     public async Task SendAsync(string message, CancellationToken cancellationToken = default)
     {
@@ -83,15 +115,18 @@ public sealed class TcpClientService : IDisposable, IAsyncDisposable
             throw new InvalidOperationException("Không thể gửi vì chưa kết nối tới server.");
         }
 
-        await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        writeCts.CancelAfter(5000); // 5 giây timeout cho thao tác gửi
+
+        await _sendLock.WaitAsync(writeCts.Token).ConfigureAwait(false);
         try
         {
-            await _writer.WriteLineAsync(message.AsMemory(), cancellationToken).ConfigureAwait(false);
+            await _writer.WriteLineAsync(message.AsMemory(), writeCts.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             ErrorOccurred?.Invoke(ex);
-            Disconnect();
+            Disconnect($"Lỗi khi gửi dữ liệu: {ex.Message}");
             throw;
         }
         finally
@@ -105,15 +140,18 @@ public sealed class TcpClientService : IDisposable, IAsyncDisposable
     /// </summary>
     private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
     {
+        string? disconnectReason = null;
+
         try
         {
             while (!cancellationToken.IsCancellationRequested && _reader != null)
             {
                 var line = await _reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
 
-                // Khi server đóng kết nối, ReadLineAsync trả về null
+                // Khi server đóng kết nối một cách êm đẹp, ReadLineAsync trả về null
                 if (line is null)
                 {
+                    disconnectReason = "Máy chủ đã đóng kết nối.";
                     break;
                 }
 
@@ -125,42 +163,63 @@ public sealed class TcpClientService : IDisposable, IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            // Hủy kết nối bình thường
+            disconnectReason = "Client chủ động ngắt kết nối.";
         }
-        catch (IOException ex) when (ex.InnerException is SocketException)
+        catch (IOException ex) when (ex.InnerException is SocketException sockEx)
         {
-            // Kết nối bị ngắt từ phía server hoặc mạng
+            disconnectReason = $"Mất kết nối tới server ({sockEx.SocketErrorCode}).";
         }
         catch (Exception ex)
         {
+            disconnectReason = $"Lỗi kết nối: {ex.Message}";
             ErrorOccurred?.Invoke(ex);
         }
         finally
         {
-            Disconnect();
+            Disconnect(disconnectReason);
         }
     }
 
     /// <summary>
-    /// Ngắt kết nối và đóng tài nguyên an toàn.
+    /// Ngắt kết nối và đóng tài nguyên an toàn, có thể truyền lý do ngắt kết nối.
     /// </summary>
-    public void Disconnect()
+    public void Disconnect(string? reason = null)
     {
-        if (_cts != null && !_cts.IsCancellationRequested)
+        bool notify = false;
+
+        lock (_disconnectLock)
         {
-            try
+            if (State == ConnectionState.Disconnected && _tcpClient == null)
             {
-                _cts.Cancel();
+                return;
             }
-            catch (ObjectDisposedException) { }
+
+            SetState(ConnectionState.Disconnecting);
+            LastDisconnectReason = reason;
+
+            if (_cts != null && !_cts.IsCancellationRequested)
+            {
+                try
+                {
+                    _cts.Cancel();
+                }
+                catch (ObjectDisposedException) { }
+            }
+
+            bool wasConnected = _tcpClient != null;
+            Cleanup();
+            SetState(ConnectionState.Disconnected);
+
+            if (wasConnected)
+            {
+                notify = true;
+            }
         }
 
-        bool wasConnected = _tcpClient != null;
-        Cleanup();
-
-        if (wasConnected)
+        if (notify)
         {
             Disconnected?.Invoke();
+            DisconnectedWithReason?.Invoke(reason);
         }
     }
 
@@ -186,7 +245,7 @@ public sealed class TcpClientService : IDisposable, IAsyncDisposable
     {
         if (_isDisposed) return;
         _isDisposed = true;
-        Disconnect();
+        Disconnect("Client đã bị Dispose.");
         _sendLock.Dispose();
     }
 
@@ -194,7 +253,7 @@ public sealed class TcpClientService : IDisposable, IAsyncDisposable
     {
         if (_isDisposed) return;
         _isDisposed = true;
-        Disconnect();
+        Disconnect("Client đã bị DisposeAsync.");
         if (_receiveTask != null)
         {
             try { await _receiveTask.ConfigureAwait(false); } catch { }
