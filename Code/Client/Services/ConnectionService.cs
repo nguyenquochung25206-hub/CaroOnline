@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Text.Json;
 using Caro.Client.Networking;
 using Caro.Shared.Messages;
@@ -21,8 +22,18 @@ public sealed class RoomInfo
 }
 
 /// <summary>
-/// Service cấp ứng dụng quản lý trạng thái kết nối, mã hóa/giải mã NetworkMessage và giao tiếp với Server.
-/// Đảm nhiệm: Kết nối TCP, Đo Ping/Pong định kỳ (15s/45s), Tạo/Vào/Rời phòng, Nước đi Caro và Chat.
+/// Cấu hình kết nối gần nhất của người dùng (Nhiệm vụ TV3 - Tuần 4).
+/// </summary>
+public sealed class ClientConfig
+{
+    public string LastHost { get; set; } = "127.0.0.1";
+    public int LastPort { get; set; } = 5000;
+    public string LastPlayerName { get; set; } = "Player";
+}
+
+/// <summary>
+/// Service cấp ứng dụng quản lý trạng thái kết nối, mã hóa/giải mã NetworkMessage và giao tiếp với Server (Nhiệm vụ TV3 - Tuần 1, 2, 3, 4).
+/// Đảm nhiệm: Kết nối TCP, Đo Ping/Pong định kỳ (15s/45s), Tạo/Vào/Rời phòng, Nước đi Caro, Chat và xử lý lỗi mạng mượt mà.
 /// </summary>
 public sealed class ConnectionService : IDisposable
 {
@@ -38,9 +49,12 @@ public sealed class ConnectionService : IDisposable
     private const int PongTimeoutSeconds = 45;
 
     public bool IsConnected => _tcpClientService.IsConnected;
-    public string? Host { get; private set; }
+    public ConnectionState ConnectionState => _tcpClientService.State;
+    public string Host { get; private set; } = "127.0.0.1";
     public int Port { get; private set; } = 5000;
     public string PlayerName { get; private set; } = "Player";
+    public long LastLatencyMs { get; private set; } = -1;
+    public string? LastError { get; private set; }
 
     // Trạng thái phòng hiện tại
     public RoomInfo? CurrentRoom { get; private set; }
@@ -51,6 +65,8 @@ public sealed class ConnectionService : IDisposable
     public event Action<NetworkMessage>? MessageReceived;
     public event Action<string, bool>? LogGenerated;
     public event Action<long>? PingUpdated;
+    public event Action<string>? ConnectionLost;
+    public event Action<string>? ServerErrorReported;
 
     // Sự kiện phòng chơi (Tuần 2)
     public event Action<RoomInfo>? RoomCreated;
@@ -73,7 +89,7 @@ public sealed class ConnectionService : IDisposable
     {
         _tcpClientService = new TcpClientService();
         _tcpClientService.MessageReceived += OnRawMessageReceived;
-        _tcpClientService.Disconnected += OnDisconnected;
+        _tcpClientService.DisconnectedWithReason += OnDisconnectedWithReason;
         _tcpClientService.ErrorOccurred += OnErrorOccurred;
     }
 
@@ -108,6 +124,9 @@ public sealed class ConnectionService : IDisposable
             Log($"Kết nối thành công tới {Host}:{Port}!", isError: false);
             ConnectionStateChanged?.Invoke(true, $"Đã kết nối tới {Host}:{Port}");
 
+            // Lưu cấu hình kết nối gần nhất thành công
+            SaveConfig(Host, Port, PlayerName);
+
             // Khởi động PING định kỳ mỗi 15 giây
             StartPingTimer();
 
@@ -117,10 +136,22 @@ public sealed class ConnectionService : IDisposable
         }
         catch (Exception ex)
         {
+            LastError = ex.Message;
             Log($"Lỗi kết nối: {ex.Message}", isError: true);
             ConnectionStateChanged?.Invoke(false, $"Lỗi: {ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// Hỗ trợ kết nối lại (Reconnect) nhanh chóng sử dụng cấu hình IP/Port trước đó.
+    /// </summary>
+    public async Task<bool> ReconnectAsync(CancellationToken cancellationToken = default)
+    {
+        Log("Đang thử kết nối lại...", isError: false);
+        Disconnect();
+        await Task.Delay(300, cancellationToken).ConfigureAwait(false);
+        return await ConnectAsync(Host, Port, PlayerName, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -147,7 +178,7 @@ public sealed class ConnectionService : IDisposable
         if (DateTime.UtcNow - _lastPongReceivedTime > TimeSpan.FromSeconds(PongTimeoutSeconds))
         {
             Log($"[MẤT KẾT NỐI] Đã quá {PongTimeoutSeconds} giây không có phản hồi PONG từ Server. Đóng kết nối an toàn.", isError: true);
-            Disconnect();
+            _tcpClientService.Disconnect("Đã quá 45 giây không có phản hồi PONG từ Server.");
             return;
         }
 
@@ -168,7 +199,7 @@ public sealed class ConnectionService : IDisposable
     private void Disconnect()
     {
         StopPingTimer();
-        _tcpClientService.Disconnect();
+        _tcpClientService.Disconnect("Client chủ động ngắt kết nối.");
     }
 
     /// <summary>
@@ -352,11 +383,18 @@ public sealed class ConnectionService : IDisposable
     }
 
     /// <summary>
-    /// Gửi tin nhắn trò chuyện (chat) trong phòng thi đấu.
+    /// Gửi tin nhắn trò chuyện (chat) trong phòng thi đấu (tối đa 500 ký tự theo quy định).
     /// </summary>
     public async Task<bool> SendChatMessageAsync(string content)
     {
         if (string.IsNullOrWhiteSpace(content)) return false;
+
+        string trimmed = content.Trim();
+        if (trimmed.Length > 500)
+        {
+            Log("[CHAT] Tin nhắn vượt quá giới hạn 500 ký tự cho phép.", isError: true);
+            return false;
+        }
 
         var msg = new NetworkMessage
         {
@@ -365,12 +403,12 @@ public sealed class ConnectionService : IDisposable
             {
                 RoomId = CurrentRoom?.RoomId ?? "",
                 Sender = PlayerName,
-                Message = content.Trim(),
+                Message = trimmed,
                 Timestamp = DateTime.UtcNow
             }
         };
 
-        ChatMessageReceived?.Invoke(PlayerName, content.Trim());
+        ChatMessageReceived?.Invoke(PlayerName, trimmed);
         return await SendMessageAsync(msg).ConfigureAwait(false);
     }
 
@@ -441,9 +479,9 @@ public sealed class ConnectionService : IDisposable
             case MessageTypes.Pong:
                 _lastPongReceivedTime = DateTime.UtcNow;
                 _pingStopwatch.Stop();
-                long latency = _pingStopwatch.ElapsedMilliseconds;
-                PingUpdated?.Invoke(latency);
-                Log($"[PONG] Độ trễ phản hồi: {latency} ms", isError: false);
+                LastLatencyMs = _pingStopwatch.ElapsedMilliseconds;
+                PingUpdated?.Invoke(LastLatencyMs);
+                Log($"[PONG] Độ trễ phản hồi: {LastLatencyMs} ms", isError: false);
                 break;
 
             case MessageTypes.RoomCreated:
@@ -538,7 +576,9 @@ public sealed class ConnectionService : IDisposable
 
             case MessageTypes.Error:
                 string errMsg = ExtractPropertyString(message.Payload, "message", "error") ?? "Lỗi từ server.";
+                LastError = errMsg;
                 Log($"[MÁY CHỦ BÁO LỖI] {errMsg}", isError: true);
+                ServerErrorReported?.Invoke(errMsg);
                 break;
         }
     }
@@ -685,16 +725,26 @@ public sealed class ConnectionService : IDisposable
         return null;
     }
 
-    private void OnDisconnected()
+    private void OnDisconnectedWithReason(string? reason)
     {
         StopPingTimer();
-        Log("Đã ngắt kết nối với máy chủ.", isError: false);
+        string displayReason = string.IsNullOrWhiteSpace(reason) ? "Đã ngắt kết nối với máy chủ." : reason;
+        Log($"[NGẮT KẾT NỐI] {displayReason}", isError: false);
+
+        bool wasInRoom = CurrentRoom != null;
         CurrentRoom = null;
-        ConnectionStateChanged?.Invoke(false, "Đã ngắt kết nối");
+
+        ConnectionStateChanged?.Invoke(false, displayReason);
+
+        if (wasInRoom)
+        {
+            ConnectionLost?.Invoke(displayReason);
+        }
     }
 
     private void OnErrorOccurred(Exception ex)
     {
+        LastError = ex.Message;
         Log($"Lỗi mạng: {ex.Message}", isError: true);
     }
 
@@ -702,6 +752,50 @@ public sealed class ConnectionService : IDisposable
     {
         LogGenerated?.Invoke($"[{DateTime.Now:HH:mm:ss}] {message}", isError);
     }
+
+    #region Configuration Storage (Tuần 4)
+
+    private static readonly string ConfigPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "caro_client_config.json");
+
+    /// <summary>
+    /// Lưu cấu hình IP, Port, PlayerName gần nhất vào tệp JSON cục bộ.
+    /// </summary>
+    public static void SaveConfig(string host, int port, string playerName)
+    {
+        try
+        {
+            var config = new ClientConfig
+            {
+                LastHost = string.IsNullOrWhiteSpace(host) ? "127.0.0.1" : host.Trim(),
+                LastPort = port is >= 1 and <= 65535 ? port : 5000,
+                LastPlayerName = string.IsNullOrWhiteSpace(playerName) ? "Player" : playerName.Trim()
+            };
+            string json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(ConfigPath, json);
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// Nạp cấu hình kết nối gần nhất đã lưu.
+    /// </summary>
+    public static ClientConfig LoadConfig()
+    {
+        try
+        {
+            if (File.Exists(ConfigPath))
+            {
+                string json = File.ReadAllText(ConfigPath);
+                var config = JsonSerializer.Deserialize<ClientConfig>(json);
+                if (config != null) return config;
+            }
+        }
+        catch { }
+
+        return new ClientConfig();
+    }
+
+    #endregion
 
     public void Dispose()
     {
