@@ -74,6 +74,16 @@ public sealed class ClientManager
         return _clients.TryGetValue(clientId, out session);
     }
 
+    // Tim Client theo PlayerId (chuoi Guid dang "D", chinh la ClientSession.Id.ToString()).
+    // RoomService/GameService luu nguoi choi bang chuoi nay. Khong thay thi tra null.
+    public ClientSession? FindByPlayerId(string? playerId)
+    {
+        if (!Guid.TryParse(playerId, out Guid clientId))
+            return null;
+
+        return _clients.TryGetValue(clientId, out ClientSession? session) ? session : null;
+    }
+
     // Tim Client theo ten nguoi choi (khong phan biet hoa thuong). Khong thay thi tra null.
     public ClientSession? FindByName(string name)
     {

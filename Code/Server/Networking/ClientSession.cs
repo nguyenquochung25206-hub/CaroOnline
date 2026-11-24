@@ -167,7 +167,7 @@ public sealed class ClientSession
             // Client im lang qua lau: co the da mat mang ma Server khong nhan duoc tin hieu dong.
             reason = DisconnectReason.Timeout;
             detail = $"no data for {_idleTimeout.TotalSeconds:0} seconds";
-            await SendErrorAsync("Disconnected: idle timeout").ConfigureAwait(false);
+            await SendErrorAsync("Disconnected: idle timeout", null, "IDLE_TIMEOUT").ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -180,7 +180,7 @@ public sealed class ClientSession
             // Dong qua dai: bao loi roi ngat Client.
             reason = DisconnectReason.InvalidData;
             detail = ex.Message;
-            await SendErrorAsync(ex.Message).ConfigureAwait(false);
+            await SendErrorAsync(ex.Message, null, "INVALID_DATA").ConfigureAwait(false);
         }
         catch (IOException ex)
         {
@@ -246,13 +246,14 @@ public sealed class ClientSession
         return SendEncodedAsync(data);
     }
 
-    // Gui message ERROR cho Client nay (TV5 co the dung de bao loi).
-    public Task<bool> SendErrorAsync(string text, string? requestId = null)
+    // Gui message ERROR cho Client nay. Payload: { errorCode, message }.
+    // errorCode la ma may doc duoc (vi du INVALID_JSON), message la noi dung hien thi cho nguoi dung.
+    public Task<bool> SendErrorAsync(string text, string? requestId = null, string errorCode = "ERROR")
     {
         var message = new NetworkMessage
         {
             Type = MessageTypes.Error,
-            Payload = new { message = text }
+            Payload = new { errorCode, message = text }
         };
 
         if (!string.IsNullOrWhiteSpace(requestId))
@@ -482,7 +483,7 @@ public sealed class ClientSession
         if (!MessageValidator.IsRawLengthValid(line, out string rawError))
         {
             ServerLogger.InvalidMessage(RemoteAddress, rawError);
-            await SendErrorAsync(rawError).ConfigureAwait(false);
+            await SendErrorAsync(rawError, null, "MESSAGE_TOO_LONG").ConfigureAwait(false);
             return;
         }
 
@@ -491,14 +492,14 @@ public sealed class ClientSession
         if (message == null)
         {
             ServerLogger.InvalidMessage(RemoteAddress, "invalid JSON");
-            await SendErrorAsync("Invalid JSON message").ConfigureAwait(false);
+            await SendErrorAsync("Invalid JSON message", null, "INVALID_JSON").ConfigureAwait(false);
             return;
         }
 
         if (!MessageValidator.IsValid(message, out string error))
         {
             ServerLogger.InvalidMessage(RemoteAddress, error);
-            await SendErrorAsync(error, message.RequestId).ConfigureAwait(false);
+            await SendErrorAsync(error, message.RequestId, "INVALID_MESSAGE").ConfigureAwait(false);
             return;
         }
 
@@ -533,7 +534,8 @@ public sealed class ClientSession
         if (name.Length == 0)
             name = SanitizeName(payload?.PlayerName);
 
-        if (name.Length > 0)
+        // Dang o trong phong thi giu nguyen ten: Client phan biet chu phong/khach bang ten.
+        if (name.Length > 0 && RoomId == null)
             PlayerName = name;
 
         ServerLogger.Info($"HELLO from {RemoteAddress} as '{PlayerName}'");
@@ -556,7 +558,7 @@ public sealed class ClientSession
     {
         if (_onMessage == null)
         {
-            await SendErrorAsync("Unknown message type", message.RequestId)
+            await SendErrorAsync("Unknown message type", message.RequestId, "UNKNOWN_TYPE")
                 .ConfigureAwait(false);
             return;
         }
@@ -569,7 +571,7 @@ public sealed class ClientSession
         {
             // Loi xu ly 1 message khong duoc lam mat ket noi cua Client.
             ServerLogger.Error($"Error handling {message.Type} from {RemoteAddress}", ex);
-            await SendErrorAsync("Server error while handling request", message.RequestId)
+            await SendErrorAsync("Server error while handling request", message.RequestId, "SERVER_ERROR")
                 .ConfigureAwait(false);
         }
     }
