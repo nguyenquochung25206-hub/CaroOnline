@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Text.Json;
 using Caro.Shared.Messages;
 
@@ -54,25 +53,9 @@ public static class MessageCodec
         {
             return default;
         }
-    }
-
-    public static List<string> ExtractMessages(ref string dataBuffer)
-    {
-        var messages = new List<string>();
-        int newlineIndex;
-
-        while ((newlineIndex = dataBuffer.IndexOf('\n')) >= 0)
+        catch (NotSupportedException)
         {
-            string singleJson = dataBuffer.Substring(0, newlineIndex);
-
-            if (!string.IsNullOrWhiteSpace(singleJson))
-            {
-                messages.Add(singleJson);
-            }
-
-            dataBuffer = dataBuffer.Substring(newlineIndex + 1);
+            return default;
         }
-
-        return messages;
     }
 }

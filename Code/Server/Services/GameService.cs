@@ -70,7 +70,7 @@ namespace Caro.Server.Services
             // 1. Kiểm tra trận đấu đã kết thúc chưa
             if (IsGameOver)
             {
-                error = "Tran dau da ket thuc.";
+                error = "Trận đấu đã kết thúc.";
                 return false;
             }
 
@@ -87,14 +87,14 @@ namespace Caro.Server.Services
             }
             else
             {
-                error = "Nguoi choi khong thuoc tran dau.";
+                error = "Người chơi không thuộc trận đấu.";
                 return false;
             }
 
             // 3. Kiểm tra lượt chơi
             if (movePlayer != currentPlayer)
             {
-                error = "Chua den luot cua ban.";
+                error = "Chưa đến lượt của bạn.";
                 return false;
             }
 
@@ -110,7 +110,7 @@ namespace Caro.Server.Services
             // 6. Đặt quân lên bàn cờ
             if (!Board.TryPlaceMove(move))
             {
-                error = "Khong the dat quan co.";
+                error = "Không thể đặt quân cờ.";
                 return false;
             }
 
@@ -120,19 +120,19 @@ namespace Caro.Server.Services
             // 8. Kiểm tra trận đấu đã kết thúc chưa
             if (Result == GameResult.XWins)
             {
-                error = "Nguoi choi X chien thang.";
+                error = "Người chơi X chiến thắng.";
                 return true;
             }
 
             if (Result == GameResult.OWins)
             {
-                error = "Nguoi choi O chien thang.";
+                error = "Người chơi O chiến thắng.";
                 return true;
             }
 
             if (Result == GameResult.Draw)
             {
-                error = "Tran dau hoa.";
+                error = "Trận đấu hòa.";
                 return true;
             }
 

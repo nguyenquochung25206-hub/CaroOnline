@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json.Serialization;
 
 namespace Caro.Shared.Messages;
 
@@ -6,6 +7,7 @@ public sealed class NetworkMessage
 {
     public string Type { get; set; } = "";
     // Mã định danh để phân biệt và đối chiếu message.
+    [JsonRequired]
     public string RequestId { get; set; } = Guid.NewGuid().ToString("N");
     // Thời điểm tạo message.
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
@@ -15,6 +17,8 @@ public sealed class NetworkMessage
 public class CreateRoomPayload
 {
     public string PlayerName { get; set; } = "";
+    public string HostName { get; set; } = "";
+    public string RoomName { get; set; } = "";
     public int BoardSize { get; set; } = 15;
 }
 
@@ -24,39 +28,53 @@ public class JoinRoomPayload
     public string PlayerName { get; set; } = "";
 }
 
-public class RoomStatePayload
+public sealed class RoomCreatedPayload
 {
     public string RoomId { get; set; } = "";
-    public string PlayerX { get; set; } = "";
-    public string PlayerO { get; set; } = "";
-    public string CurrentTurn { get; set; } = "X";
-    public bool IsPlaying { get; set; } = false;
+    public string RoomName { get; set; } = "";
+    public string HostName { get; set; } = "";
 }
 
-public class MovePayload
+public sealed class RoomJoinedPayload
+{
+    public string RoomId { get; set; } = "";
+    public string HostName { get; set; } = "";
+    public string GuestName { get; set; } = "";
+}
+
+public sealed class MovePayload
 {
     public string RoomId { get; set; } = "";
     public int Row { get; set; }
     public int Col { get; set; }
+
+    public string PlayerName { get; set; } = "";
 }
 
-public class BoardUpdatedPayload
+public sealed class BoardUpdatedPayload
 {
     public string RoomId { get; set; } = "";
-    public string[][] Board { get; set; } = Array.Empty<string[]>();
     public int Row { get; set; }
     public int Col { get; set; }
     public string Symbol { get; set; } = "";
     public string CurrentTurn { get; set; } = "";
 }
 
-public class ErrorPayload
+public sealed class ChatPayload
+{
+    public string RoomId { get; set; } = "";
+    public string Sender { get; set; } = "";
+    public string Message { get; set; } = "";
+    public DateTime? Timestamp { get; set; }
+}
+
+public sealed class ErrorPayload
 {
     public string ErrorCode { get; set; } = "";
     public string Message { get; set; } = "";
 }
 
-public class GameOverPayload
+public sealed class GameOverPayload
 {
     public string RoomId { get; set; } = "";
     public string WinnerSymbol { get; set; } = "";
