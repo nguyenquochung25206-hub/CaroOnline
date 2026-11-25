@@ -237,6 +237,8 @@ namespace Caro.Server.Services
                     return false;
 
                 return rooms[roomId].Players.Count >= MaxPlayers;
+            }
+        }
         // 9. Đặt lại ván trong cùng phòng (chơi lại): tạo GameService mới, chủ phòng vẫn là X
         public bool ResetGame(string roomId)
         {
