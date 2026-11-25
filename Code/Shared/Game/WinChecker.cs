@@ -1,4 +1,3 @@
-// TODO TV4: Kiểm tra thắng theo luật nhóm thống nhất (5 liên tiếp, quy tắc chặn nếu áp dụng).
 namespace CaroGame.Shared.Game
 {
     public enum GameResult
