@@ -381,7 +381,7 @@ public class ClientWeek2Tests
             var boardUpdatedMsg = new NetworkMessage
             {
                 Type = MessageTypes.BoardUpdated,
-                Payload = new { Row = 7, Col = 7, Symbol = "X", CurrentTurn = "O" }
+                Payload = new { RoomId = "5555", Row = 7, Col = 7, Symbol = "X", CurrentTurn = "O" }
             };
             await writer.WriteLineAsync(MessageCodec.Encode(boardUpdatedMsg).TrimEnd());
 
