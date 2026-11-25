@@ -45,7 +45,7 @@ public class ClientWeek1Tests
 
     // TC_021: ConnectForm - Bỏ trống IP
     [Fact]
-    public void TC_021_ConnectForm_EmptyIP()
+    public async Task TC_021_ConnectForm_EmptyIP()
     {
         using var connectionService = new ConnectionService();
         using var form = new ConnectForm(connectionService, "", 5000, "TestPlayer");
@@ -56,7 +56,7 @@ public class ClientWeek1Tests
         Assert.Contains("IP", form.StatusMessage);
         Assert.False(connectionService.IsConnected);
 
-        Assert.ThrowsAsync<ArgumentException>(async () =>
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
             await connectionService.ConnectAsync("", 5000, "TestPlayer"));
     }
 
@@ -168,9 +168,14 @@ public class ClientWeek1Tests
                 if (line == null) break;
 
                 var msg = MessageCodec.Decode(line);
-                if (msg?.Type == MessageTypes.Ping)
+                if (msg is { Type: MessageTypes.Ping })
                 {
-                    var pong = new NetworkMessage { Type = MessageTypes.Pong, RequestId = msg.RequestId };
+                    var pong = new NetworkMessage
+                    {
+                        Type = MessageTypes.Pong,
+                        RequestId = msg.RequestId,
+                        Payload = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
                     await writer.WriteLineAsync(MessageCodec.Encode(pong).TrimEnd());
                     break;
                 }
