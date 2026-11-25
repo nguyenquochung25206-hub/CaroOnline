@@ -40,7 +40,12 @@ namespace Caro.Server.Services
             string playerId,
             out string roomId)
         {
-            roomId = Guid.NewGuid().ToString("N").Substring(0, 6);
+            // Sinh lại mã cho đến khi không trùng với phòng đang tồn tại
+            do
+            {
+                 roomId = Guid.NewGuid().ToString("N").Substring(0, 6);
+            }
+            while (rooms.ContainsKey(roomId));
 
             Room room = new Room(roomId);
 
@@ -232,6 +237,23 @@ namespace Caro.Server.Services
                     return false;
 
                 return rooms[roomId].Players.Count >= MaxPlayers;
+        // 9. Đặt lại ván trong cùng phòng (chơi lại): tạo GameService mới, chủ phòng vẫn là X
+        public bool ResetGame(string roomId)
+        {
+             lock (syncLock)
+             {
+                if (string.IsNullOrWhiteSpace(roomId))
+                    return false;
+
+                if (!rooms.TryGetValue(roomId, out Room? room) ||
+                    room.Players.Count < MaxPlayers)
+                    return false;
+
+                room.Game = new GameService(
+                    room.Players[0],
+                    room.Players[1]);
+
+                return true;
             }
         }
     }
