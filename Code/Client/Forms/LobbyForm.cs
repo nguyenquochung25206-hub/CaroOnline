@@ -764,4 +764,11 @@ public sealed class LobbyForm : Form
         _rtbChat.AppendText($"[Hệ thống]: {message}{Environment.NewLine}");
         _rtbChat.ScrollToCaret();
     }
+
+    #region Public Properties for Testing & Automation
+
+    public bool IsStartGameButtonEnabled => _btnStartGame.Enabled;
+    public string CurrentMatchStatus => _lblMatchStatus.Text;
+
+    #endregion
 }
