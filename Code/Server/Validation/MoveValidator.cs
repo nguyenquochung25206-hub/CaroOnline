@@ -14,14 +14,14 @@ namespace Caro.Server.Validation
             // 1. Kiểm tra bàn cờ
             if (board == null)
             {
-                error = "Ban co khong ton tai.";
+                error = "Bàn cờ không tồn tại.";
                 return false;
             }
 
             // 2. Kiểm tra nước đi
             if (move == null)
             {
-                error = "Nuoc di khong hop le.";
+                error = "Nước đi không hợp lệ.";
                 return false;
             }
 
@@ -29,21 +29,21 @@ namespace Caro.Server.Validation
             if (move.Player != Player.X &&
                 move.Player != Player.O)
             {
-                error = "Nguoi choi khong hop le.";
+                error = "Người chơi không hợp lệ.";
                 return false;
             }
 
             // 4. Kiểm tra tọa độ
             if (!board.IsInside(move.Row, move.Col))
             {
-                error = "Toa do nam ngoai ban co.";
+                error = "Tọa độ nằm ngoài bàn cờ.";
                 return false;
             }
 
             // 5. Kiểm tra ô đã có quân chưa
             if (board.GetCell(move.Row, move.Col) != Player.None)
             {
-                error = "O nay da co quan.";
+                error = "Ô này đã có quân.";
                 return false;
             }
 
