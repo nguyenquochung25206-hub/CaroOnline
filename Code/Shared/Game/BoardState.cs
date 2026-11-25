@@ -1,4 +1,3 @@
-// TODO TV4: Trạng thái bàn cờ; thống nhất kích thước và quy ước ô trống.
 namespace CaroGame.Shared.Game
 {
     public sealed class BoardState
