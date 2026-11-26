@@ -575,7 +575,10 @@ public sealed class LobbyForm : Form
         }
 
         _lblLobbyStatus.Text = $"Lỗi: {reason}";
-        MessageBox.Show($"Không thể tham gia phòng: {reason}", "Lỗi tham gia phòng", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        if (Visible && IsHandleCreated)
+        {
+            MessageBox.Show($"Không thể tham gia phòng: {reason}", "Lỗi tham gia phòng", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
         UpdateViewMode();
     }
 
@@ -671,7 +674,10 @@ public sealed class LobbyForm : Form
         var gameForm = new CaroGame.Client.GameForm(_connectionService, mySymbol, playerX, playerO);
         gameForm.Show();
 
-        MessageBox.Show($"Ván cờ tại phòng #{roomId} đã chính thức bắt đầu!\n(Quân X đi trước, quân O đi sau)", "Bắt đầu trận đấu", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        if (Visible && IsHandleCreated)
+        {
+            MessageBox.Show($"Ván cờ tại phòng #{roomId} đã chính thức bắt đầu!\n(Quân X đi trước, quân O đi sau)", "Bắt đầu trận đấu", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
     }
 
     private void OnConnectionStateChanged(bool isConnected, string status)
