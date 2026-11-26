@@ -87,8 +87,11 @@ public sealed class TcpClientService : IDisposable, IAsyncDisposable
 
             SetState(ConnectionState.Connected);
 
-            // Bắt đầu vòng lặp đọc dữ liệu nền
-            _receiveTask = Task.Run(() => ReceiveLoopAsync(_cts.Token), CancellationToken.None);
+            // Bắt đầu vòng lặp đọc dữ liệu nền cho phiên kết nối hiện tại
+            TcpClient currentClient = _tcpClient;
+            StreamReader currentReader = _reader;
+            CancellationToken currentToken = _cts.Token;
+            _receiveTask = Task.Run(() => ReceiveLoopAsync(currentClient, currentReader, currentToken), CancellationToken.None);
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
         {
@@ -137,16 +140,17 @@ public sealed class TcpClientService : IDisposable, IAsyncDisposable
 
     /// <summary>
     /// Vòng lặp nhận dữ liệu từ NetworkStream theo từng dòng (newline-delimited).
+    /// Nhận client, reader và token riêng biệt để tránh đọc nhầm hoặc ngắt kết nối mới khi kết nối lại nhanh.
     /// </summary>
-    private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
+    private async Task ReceiveLoopAsync(TcpClient client, StreamReader reader, CancellationToken token)
     {
         string? disconnectReason = null;
 
         try
         {
-            while (!cancellationToken.IsCancellationRequested && _reader != null)
+            while (!token.IsCancellationRequested)
             {
-                var line = await _reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+                var line = await reader.ReadLineAsync(token).ConfigureAwait(false);
 
                 // Khi server đóng kết nối một cách êm đẹp, ReadLineAsync trả về null
                 if (line is null)
@@ -161,6 +165,7 @@ public sealed class TcpClientService : IDisposable, IAsyncDisposable
                 }
             }
         }
+        catch (ObjectDisposedException) { }
         catch (OperationCanceledException)
         {
             disconnectReason = "Client chủ động ngắt kết nối.";
@@ -169,14 +174,18 @@ public sealed class TcpClientService : IDisposable, IAsyncDisposable
         {
             disconnectReason = $"Mất kết nối tới server ({sockEx.SocketErrorCode}).";
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!token.IsCancellationRequested)
         {
             disconnectReason = $"Lỗi kết nối: {ex.Message}";
             ErrorOccurred?.Invoke(ex);
         }
         finally
         {
-            Disconnect(disconnectReason);
+            // Chỉ ngắt nếu kết nối hiện tại vẫn là kết nối của vòng lặp này
+            if (ReferenceEquals(_tcpClient, client))
+            {
+                Disconnect(disconnectReason);
+            }
         }
     }
 
