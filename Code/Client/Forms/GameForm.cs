@@ -148,13 +148,13 @@ namespace CaroGame.Client
         {
             if (connectionService == null || eventsSubscribed) return;
 
-            boardControl.MovePlayed += OnMovePlayed;
-
+            boardControl.MovePlayed += OnLocalMovePlayed;
             connectionService.MoveAccepted += OnMoveAccepted;
             connectionService.MoveRejected += OnMoveRejected;
-            connectionService.BoardUpdated += OnBoardUpdatedFromServer;
-            connectionService.GameOver += OnGameOverFromServer;
+            connectionService.BoardUpdated += OnBoardUpdated;
+            connectionService.GameOver += OnGameOver;
             connectionService.OpponentLeft += OnOpponentLeft;
+            connectionService.ConnectionStateChanged += OnConnectionStateChanged;
             connectionService.ConnectionLost += OnConnectionLost;
 
             eventsSubscribed = true;
@@ -164,32 +164,32 @@ namespace CaroGame.Client
         {
             if (connectionService == null || !eventsSubscribed) return;
 
-            boardControl.MovePlayed -= OnMovePlayed;
-
+            boardControl.MovePlayed -= OnLocalMovePlayed;
             connectionService.MoveAccepted -= OnMoveAccepted;
             connectionService.MoveRejected -= OnMoveRejected;
-            connectionService.BoardUpdated -= OnBoardUpdatedFromServer;
-            connectionService.GameOver -= OnGameOverFromServer;
+            connectionService.BoardUpdated -= OnBoardUpdated;
+            connectionService.GameOver -= OnGameOver;
             connectionService.OpponentLeft -= OnOpponentLeft;
+            connectionService.ConnectionStateChanged -= OnConnectionStateChanged;
             connectionService.ConnectionLost -= OnConnectionLost;
 
             eventsSubscribed = false;
         }
 
-        private async void OnMovePlayed(Move move)
+        private async void OnLocalMovePlayed(Move move)
         {
             if (connectionService == null || gameFinished) return;
 
             bool sent = await connectionService.SendMoveAsync(
                 move.Row, move.Col);
 
-            if (!sent && !IsDisposed && !gameFinished)
+            if (!sent && !IsDisposed)
             {
                 RunOnUiThread(() =>
                 {
                     boardControl.SetOnlineTurn(true);
                     statusLabel.Text =
-                        "Không gửi được nước đi. Vui lòng kiểm tra kết nối.";
+                        "Không gửi được nước đi lên server. Hãy thử lại.";
                     statusLabel.ForeColor = Color.FromArgb(220, 53, 69);
                 });
             }
@@ -199,8 +199,11 @@ namespace CaroGame.Client
         {
             RunOnUiThread(() =>
             {
+                if (gameFinished) return;
+
                 statusLabel.Text =
-                    $"Server đã chấp nhận nước đi ({row}, {col}).";
+                    $"Server đã ghi nhận nước đi ({row}, {col}). Chờ cập nhật bàn cờ...";
+                statusLabel.ForeColor = Color.DimGray;
             });
         }
 
@@ -216,40 +219,33 @@ namespace CaroGame.Client
             });
         }
 
-        private void OnBoardUpdatedFromServer(
-            int row, int col, string symbol, string nextTurn)
-        {
-            RunOnUiThread(() =>
-                OnBoardUpdated(row, col, symbol, nextTurn));
-        }
-
-        private void OnGameOverFromServer(
-            string winnerSymbol, string winnerName, string reason)
-        {
-            RunOnUiThread(() =>
-                OnGameOver(winnerSymbol, winnerName, reason));
-        }
-
         private void OnOpponentLeft(string opponent)
         {
             RunOnUiThread(() =>
             {
-                if (gameFinished) return;
+                string message = string.IsNullOrWhiteSpace(opponent)
+                    ? "Đối thủ đã rời phòng. Trận đấu kết thúc."
+                    : $"Đối thủ '{opponent}' đã rời phòng. Trận đấu kết thúc.";
 
                 FinishGame(
-                    $"Đối thủ '{opponent}' đã rời trận đấu.",
+                    message,
                     Color.FromArgb(25, 135, 84),
-                    "Đối thủ đã rời trận đấu");
+                    "Đối thủ rời phòng");
             });
+        }
+
+        private void OnConnectionStateChanged(bool isConnected, string status)
+        {
+            if (!isConnected)
+                OnConnectionLost(status);
         }
 
         private void OnConnectionLost(string reason)
         {
             RunOnUiThread(() =>
             {
-                if (gameFinished) return;
-
-                string message = "Mất kết nối với máy chủ. Bàn cờ đã được khóa.";
+                string message =
+                    "Mất kết nối tới máy chủ. Bàn cờ đã được khóa.";
 
                 if (!string.IsNullOrWhiteSpace(reason))
                     message += $"\nLý do: {reason}";
@@ -352,10 +348,13 @@ namespace CaroGame.Client
             statusLabel.ForeColor = color;
             returnToLobbyButton.Visible = connectionService != null;
 
-            MessageBox.Show(
-                message, title,
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            if (Visible && IsHandleCreated)
+            {
+                MessageBox.Show(
+                    message, title,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
         }
 
         private void OnReturnToLobbyClicked(
