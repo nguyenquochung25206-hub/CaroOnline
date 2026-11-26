@@ -213,6 +213,11 @@ public sealed class ConnectionService : IDisposable
             return false;
         }
 
+        if (string.IsNullOrWhiteSpace(message.RequestId))
+        {
+            message.RequestId = Guid.NewGuid().ToString("N");
+        }
+
         if (!MessageValidator.IsValid(message, out var validationError))
         {
             Log($"Tin nhắn không hợp lệ: {validationError}", isError: true);
@@ -476,6 +481,15 @@ public sealed class ConnectionService : IDisposable
     {
         switch (message.Type)
         {
+            case MessageTypes.Welcome:
+                string? serverName = ExtractPropertyString(message.Payload, "playerName", "name");
+                if (!string.IsNullOrWhiteSpace(serverName))
+                {
+                    PlayerName = serverName;
+                    Log($"[WELCOME] Server xác nhận tên người chơi: {PlayerName}", isError: false);
+                }
+                break;
+
             case MessageTypes.Pong:
                 _lastPongReceivedTime = DateTime.UtcNow;
                 _pingStopwatch.Stop();
@@ -575,10 +589,18 @@ public sealed class ConnectionService : IDisposable
                 break;
 
             case MessageTypes.Error:
+                string errCode = ExtractPropertyString(message.Payload, "errorCode", "code") ?? "ERROR";
                 string errMsg = ExtractPropertyString(message.Payload, "message", "error") ?? "Lỗi từ server.";
-                LastError = errMsg;
-                Log($"[MÁY CHỦ BÁO LỖI] {errMsg}", isError: true);
-                ServerErrorReported?.Invoke(errMsg);
+                LastError = $"[{errCode}] {errMsg}";
+                Log($"[MÁY CHỦ BÁO LỖI] {LastError}", isError: true);
+                ServerErrorReported?.Invoke(LastError);
+
+                if (string.Equals(errCode, "IDLE_TIMEOUT", StringComparison.OrdinalIgnoreCase) ||
+                    errMsg.Contains("Server đang tắt", StringComparison.OrdinalIgnoreCase) ||
+                    errMsg.Contains("Server shutting down", StringComparison.OrdinalIgnoreCase))
+                {
+                    _tcpClientService.Disconnect($"Mất kết nối: {errMsg}");
+                }
                 break;
         }
     }

@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using System.Text.Json;
 using Caro.Shared.Messages;
 
@@ -6,370 +7,398 @@ namespace Caro.Shared.Protocol;
 
 public static class MessageValidator
 {
-    private const int MaxMessageLength = 16384;
-
+    // Giới hạn kích thước theo quy ước chung của dự án
+    private const int MaxMessageLength = 64 * 1024;
+    private const int MaxPayloadLength = 16384;
     private const int MaxChatLength = 500;
+    private const int BoardSize = 15;
 
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
+    /// <summary>
+    /// Kiểm tra message Client gửi lên Server.
+    /// Chỉ sử dụng để kiểm tra chiều Client -> Server.
+    /// </summary>
     public static bool IsValid(NetworkMessage? message, out string error)
-    {
-        error = "";
-
-        if (message is null)
-        {
-            error = "Message rong hoac JSON khong hop le.";
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(message.Type))
-        {
-            error = "Thieu truong Type hoac Type khong hop le.";
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(message.RequestId))
-        {
-            error = "Thieu truong RequestId de dinh danh goi tin.";
-            return false;
-        }
-
-        try
-        {
-            if (message.Payload != null)
-            {
-                string payloadJson = JsonSerializer.Serialize(message.Payload, Options);
-                if (payloadJson.Length > MaxMessageLength)
-                {
-                    error = $"Payload vuot qua {MaxMessageLength} ky tu.";
-                    return false;
-                }
-            }
-        }
-        catch (JsonException)
-        {
-            error = "Payload khong the chuyen doi thanh JSON.";
-            return false;
-        }
-        catch (NotSupportedException)
-        {
-            error = "Payload co kieu du lieu khong duoc ho tro.";
-            return false;
-        }
-
-        return ValidatePayload(message.Type, message, out error);
-    }
-
-    public static bool ValidatePayload(
-        string type,
-        NetworkMessage message,
-        out string error)
     {
         error = "";
 
         if (message == null)
         {
-            error = "Message khong duoc null.";
+            error = "Message không được null.";
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(type))
+        if (string.IsNullOrWhiteSpace(message.Type))
         {
-            error = "Type khong duoc de trong.";
+            error = "Thiếu Type.";
             return false;
         }
 
-        string normalizedType = type.Trim().ToUpperInvariant();
-
-        if (normalizedType == MessageTypes.Ping || normalizedType == MessageTypes.Pong)
+        if (string.IsNullOrWhiteSpace(message.RequestId))
         {
-            if (!TryGetPayloadElement(message.Payload!, out JsonElement pingPayload) ||
-                pingPayload.ValueKind != JsonValueKind.Number ||
-                !pingPayload.TryGetInt64(out _))
+            error = "Thiếu RequestId.";
+            return false;
+        }
+
+        // Kiểm tra kích thước Payload
+        if (message.Payload != null)
+        {
+            try
             {
-                error = $"{type} can Payload la timestamp dang so nguyen.";
+                string payloadJson = JsonSerializer.Serialize(message.Payload);
+
+                if (payloadJson.Length > MaxPayloadLength)
+                {
+                    error = $"Payload vượt quá {MaxPayloadLength} ký tự.";
+                    return false;
+                }
+            }
+            catch (Exception)
+            {
+                error = "Không thể đọc Payload.";
                 return false;
             }
-
-            return true;
         }
 
-        if (message.Payload == null)
-        {
-            if (normalizedType == MessageTypes.CreateRoom ||
-                normalizedType == MessageTypes.JoinRoom ||
-                normalizedType == MessageTypes.Move ||
-                normalizedType == MessageTypes.Chat ||
-                normalizedType == MessageTypes.BoardUpdated ||
-                normalizedType == MessageTypes.RoomCreated ||
-                normalizedType == MessageTypes.RoomJoined ||
-                normalizedType == MessageTypes.StartGame ||
-                normalizedType == MessageTypes.LeaveRoom)
-            {
-                error = $"Payload cua {type} khong duoc de trong.";
-                return false;
-            }
-
-            return true;
-        }
-
-        if (!TryGetPayloadElement(message.Payload, out JsonElement payload))
-        {
-            error = $"Payload cua {type} khong phai JSON object hop le.";
-            return false;
-        }
-
-        if (payload.ValueKind != JsonValueKind.Object)
-        {
-            error = $"Payload cua {type} phai la mot object JSON.";
-            return false;
-        }
-
-        switch (type.Trim().ToUpperInvariant())
-        {
-            case MessageTypes.CreateRoom:
-                {
-                    if (!TryGetString(payload, "PlayerName", out string playerName) ||
-                        string.IsNullOrWhiteSpace(playerName) ||
-                        !TryGetString(payload, "RoomName", out string roomName) ||
-                        string.IsNullOrWhiteSpace(roomName))
-                    {
-                        error = "CREATE_ROOM can PlayerName va RoomName khong duoc de trong.";
-                        return false;
-                    }
-
-                    if (!TryGetInt32(payload, "BoardSize", out int boardSize) ||
-                        boardSize <= 0)
-                    {
-                        error = "CREATE_ROOM BoardSize phai la so nguyen lon hon 0.";
-                        return false;
-                    }
-
-                    CreateRoomPayload? data = MessageCodec.GetPayload<CreateRoomPayload>(message);
-                    if (data == null)
-                    {
-                        error = "CREATE_ROOM Payload khong dung cau truc.";
-                        return false;
-                    }
-
-                    return true;
-                }
-
-            case MessageTypes.JoinRoom:
-                {
-                    JoinRoomPayload? data = MessageCodec.GetPayload<JoinRoomPayload>(message);
-
-                    if (data == null || string.IsNullOrWhiteSpace(data.RoomId))
-                    {
-                        error = "JOIN_ROOM can RoomId khong duoc de trong.";
-                        return false;
-                    }
-
-                    return true;
-                }
-
-            case MessageTypes.Move:
-                {
-                    if (!TryGetString(payload, "RoomId", out string roomId) ||
-                        string.IsNullOrWhiteSpace(roomId))
-                    {
-                        error = "MOVE can RoomId khong duoc de trong.";
-                        return false;
-                    }
-
-                    if (!TryGetInt32(payload, "Row", out _) ||
-                        !TryGetInt32(payload, "Col", out _))
-                    {
-                        error = "MOVE can Row va Col la so nguyen.";
-                        return false;
-                    }
-
-                    MovePayload? data = MessageCodec.GetPayload<MovePayload>(message);
-                    if (data == null)
-                    {
-                        error = "MOVE Payload khong dung cau truc.";
-                        return false;
-                    }
-
-                    return true;
-                }
-
-            case MessageTypes.Chat:
-                {
-                    ChatPayload? data = MessageCodec.GetPayload<ChatPayload>(message);
-
-                    if (data == null || string.IsNullOrWhiteSpace(data.Message))
-                    {
-                        error = "CHAT can Message khong duoc de trong.";
-                        return false;
-                    }
-
-                    if (data.Message.Trim().Length > MaxChatLength)
-                    {
-                        error = $"CHAT khong duoc vuot qua {MaxChatLength} ky tu.";
-                        return false;
-                    }
-
-                    return true;
-                }
-
-            case MessageTypes.BoardUpdated:
-                {
-                    BoardUpdatedPayload? data = MessageCodec.GetPayload<BoardUpdatedPayload>(message);
-
-                    if (data == null ||
-                        !TryGetInt32(payload, "Row", out _) ||
-                        !TryGetInt32(payload, "Col", out _) ||
-                        string.IsNullOrWhiteSpace(data.Symbol) ||
-                        string.IsNullOrWhiteSpace(data.CurrentTurn))
-                    {
-                        error = "BOARD_UPDATED can Row, Col, Symbol va CurrentTurn hop le.";
-                        return false;
-                    }
-
-                    if (data.Symbol != "X" && data.Symbol != "O")
-                    {
-                        error = "BOARD_UPDATED Symbol chi duoc la X hoac O.";
-                        return false;
-                    }
-
-                    if (data.CurrentTurn != "X" && data.CurrentTurn != "O")
-                    {
-                        error = "BOARD_UPDATED CurrentTurn chi duoc la X hoac O.";
-                        return false;
-                    }
-
-                    return true;
-                }
-
-            case MessageTypes.RoomCreated:
-                {
-                    RoomCreatedPayload? data = MessageCodec.GetPayload<RoomCreatedPayload>(message);
-                    if (data == null || string.IsNullOrWhiteSpace(data.RoomId))
-                    {
-                        error = "ROOM_CREATED can RoomId khong duoc de trong.";
-                        return false;
-                    }
-
-                    return true;
-                }
-
-            case MessageTypes.RoomJoined:
-                {
-                    RoomJoinedPayload? data = MessageCodec.GetPayload<RoomJoinedPayload>(message);
-                    if (data == null || string.IsNullOrWhiteSpace(data.RoomId))
-                    {
-                        error = "ROOM_JOINED can RoomId khong duoc de trong.";
-                        return false;
-                    }
-
-                    return true;
-                }
-
-            case MessageTypes.StartGame:
-            case MessageTypes.LeaveRoom:
-                {
-                    if (!TryGetString(payload, "RoomId", out string roomId) ||
-                        string.IsNullOrWhiteSpace(roomId))
-                    {
-                        error = $"{type} can RoomId khong duoc de trong.";
-                        return false;
-                    }
-
-                    return true;
-                }
-
-            default:
-                return true;
-        }
+        return ValidatePayload(message, out error);
     }
 
-    public static bool IsRawLengthValid(string rawJson, out string error)
+    /// <summary>
+    /// Kiểm tra kích thước tối đa của một dòng JSON.
+    /// Giới hạn 64 KB tính theo số byte UTF-8.
+    /// </summary>
+    public static bool IsRawLengthValid(string line, out string error)
     {
         error = "";
 
-        if (string.IsNullOrWhiteSpace(rawJson))
+        if (line == null)
         {
-            error = "Du lieu tho rong.";
+            error = "Dòng JSON không được null.";
             return false;
         }
 
-        if (rawJson.Length > MaxMessageLength)
+        int length = Encoding.UTF8.GetByteCount(line);
+
+        if (length > MaxMessageLength)
         {
-            error = $"Goi tin tho vuot qua kich thuoc toi da cho phep ({MaxMessageLength} ky tu).";
+            error = $"Message vượt quá {MaxMessageLength} byte.";
             return false;
         }
 
         return true;
     }
 
-    private static bool TryGetPayloadElement(object payload, out JsonElement element)
+    private static bool ValidatePayload(
+        NetworkMessage message,
+        out string error)
     {
+        error = "";
+
+        switch (message.Type)
+        {
+            case MessageTypes.Hello:
+                // HELLO có thể không có Payload.
+                // Nếu có Name thì kiểm tra kiểu dữ liệu.
+                if (message.Payload == null)
+                    return true;
+
+                if (!TryGetPayloadElement(message, out JsonElement hello))
+                {
+                    error = "Payload HELLO không hợp lệ.";
+                    return false;
+                }
+
+                if (hello.ValueKind != JsonValueKind.Object)
+                {
+                    error = "Payload HELLO phải là object.";
+                    return false;
+                }
+
+                if (TryGetProperty(hello, "Name", out JsonElement name)
+                    && name.ValueKind != JsonValueKind.String)
+                {
+                    error = "Name phải là chuỗi.";
+                    return false;
+                }
+
+                return true;
+
+            case MessageTypes.Ping:
+                // PING bắt buộc có Payload là số nguyên Unix milliseconds.
+                if (!TryGetPayloadElement(message, out JsonElement ping))
+                {
+                    error = "PING thiếu Payload.";
+                    return false;
+                }
+
+                if (ping.ValueKind != JsonValueKind.Number
+                    || !ping.TryGetInt64(out _))
+                {
+                    error = "Payload PING phải là số nguyên Unix milliseconds.";
+                    return false;
+                }
+
+                return true;
+
+            case MessageTypes.CreateRoom:
+                if (!TryGetPayloadElement(message, out JsonElement createRoom)
+                    || createRoom.ValueKind != JsonValueKind.Object)
+                {
+                    error = "CREATE_ROOM thiếu Payload.";
+                    return false;
+                }
+
+                if (!TryGetString(createRoom, "PlayerName", out string playerName)
+                    || string.IsNullOrWhiteSpace(playerName))
+                {
+                    error = "CREATE_ROOM thiếu PlayerName.";
+                    return false;
+                }
+
+                if (!TryGetString(createRoom, "HostName", out string hostName)
+                    || string.IsNullOrWhiteSpace(hostName))
+                {
+                    error = "CREATE_ROOM thiếu HostName.";
+                    return false;
+                }
+
+                if (!TryGetString(createRoom, "RoomName", out string roomName)
+                    || string.IsNullOrWhiteSpace(roomName))
+                {
+                    error = "CREATE_ROOM thiếu RoomName.";
+                    return false;
+                }
+
+                if (!TryGetInt32(createRoom, "BoardSize", out int boardSize)
+                    || boardSize != BoardSize)
+                {
+                    error = "BoardSize phải bằng 15.";
+                    return false;
+                }
+
+                return true;
+
+            case MessageTypes.JoinRoom:
+                if (!TryGetPayloadElement(message, out JsonElement joinRoom)
+                    || joinRoom.ValueKind != JsonValueKind.Object)
+                {
+                    error = "JOIN_ROOM thiếu Payload.";
+                    return false;
+                }
+
+                if (!HasNonEmptyString(joinRoom, "RoomId"))
+                {
+                    error = "JOIN_ROOM thiếu RoomId.";
+                    return false;
+                }
+
+                if (!HasNonEmptyString(joinRoom, "PlayerName"))
+                {
+                    error = "JOIN_ROOM thiếu PlayerName.";
+                    return false;
+                }
+
+                return true;
+
+            case MessageTypes.LeaveRoom:
+                if (!TryGetPayloadElement(message, out JsonElement leaveRoom)
+                    || leaveRoom.ValueKind != JsonValueKind.Object)
+                {
+                    error = "LEAVE_ROOM thiếu Payload.";
+                    return false;
+                }
+
+                if (!HasNonEmptyString(leaveRoom, "RoomId"))
+                {
+                    error = "LEAVE_ROOM thiếu RoomId.";
+                    return false;
+                }
+
+                if (!HasNonEmptyString(leaveRoom, "PlayerName"))
+                {
+                    error = "LEAVE_ROOM thiếu PlayerName.";
+                    return false;
+                }
+
+                return true;
+
+            case MessageTypes.StartGame:
+                if (!TryGetPayloadElement(message, out JsonElement startGame)
+                    || startGame.ValueKind != JsonValueKind.Object)
+                {
+                    error = "START_GAME thiếu Payload.";
+                    return false;
+                }
+
+                if (!HasNonEmptyString(startGame, "RoomId"))
+                {
+                    error = "START_GAME thiếu RoomId.";
+                    return false;
+                }
+
+                if (!HasNonEmptyString(startGame, "PlayerName"))
+                {
+                    error = "START_GAME thiếu PlayerName.";
+                    return false;
+                }
+
+                return true;
+
+            case MessageTypes.Move:
+                if (!TryGetPayloadElement(message, out JsonElement move)
+                    || move.ValueKind != JsonValueKind.Object)
+                {
+                    error = "MOVE thiếu Payload.";
+                    return false;
+                }
+
+                if (!HasNonEmptyString(move, "RoomId"))
+                {
+                    error = "MOVE thiếu RoomId.";
+                    return false;
+                }
+
+                if (!HasNonEmptyString(move, "PlayerName"))
+                {
+                    error = "MOVE thiếu PlayerName.";
+                    return false;
+                }
+
+                if (!TryGetInt32(move, "Row", out int row))
+                {
+                    error = "Row phải là số nguyên.";
+                    return false;
+                }
+
+                if (!TryGetInt32(move, "Col", out int col))
+                {
+                    error = "Col phải là số nguyên.";
+                    return false;
+                }
+
+                if (row < 0 || row >= BoardSize
+                    || col < 0 || col >= BoardSize)
+                {
+                    error = "Tọa độ Row và Col phải nằm trong khoảng 0 đến 14.";
+                    return false;
+                }
+
+                return true;
+
+            case MessageTypes.Chat:
+                if (!TryGetPayloadElement(message, out JsonElement chat)
+                    || chat.ValueKind != JsonValueKind.Object)
+                {
+                    error = "CHAT thiếu Payload.";
+                    return false;
+                }
+
+                if (!HasNonEmptyString(chat, "RoomId"))
+                {
+                    error = "CHAT thiếu RoomId.";
+                    return false;
+                }
+
+                if (!HasNonEmptyString(chat, "Sender"))
+                {
+                    error = "CHAT thiếu Sender.";
+                    return false;
+                }
+
+                if (!TryGetString(chat, "Message", out string chatMessage)
+                    || string.IsNullOrWhiteSpace(chatMessage))
+                {
+                    error = "CHAT thiếu Message.";
+                    return false;
+                }
+
+                if (chatMessage.Length > MaxChatLength)
+                {
+                    error = $"Tin nhắn CHAT không được vượt quá {MaxChatLength} ký tự.";
+                    return false;
+                }
+
+                return true;
+            default:
+                error = $"Message Type không được hỗ trợ từ Client: {message.Type}.";
+                return false;
+        }
+    }
+    private static bool TryGetPayloadElement(
+    NetworkMessage message,
+    out JsonElement element)
+    {
+        element = default;
+        if (message.Payload == null)
+            return false;
         try
         {
-            if (payload is JsonElement jsonElement)
+            if (message.Payload is JsonElement jsonElement)
             {
                 element = jsonElement;
-                return true;
+                return element.ValueKind != JsonValueKind.Null
+                && element.ValueKind != JsonValueKind.Undefined;
             }
-
-            using JsonDocument document =
-                JsonDocument.Parse(JsonSerializer.Serialize(payload, Options));
-
+            string json = JsonSerializer.Serialize(message.Payload);
+            using JsonDocument document = JsonDocument.Parse(json);
             element = document.RootElement.Clone();
-            return true;
+            return element.ValueKind != JsonValueKind.Null
+            && element.ValueKind != JsonValueKind.Undefined;
         }
-        catch (JsonException)
+        catch (Exception)
         {
-            element = default;
-            return false;
-        }
-        catch (NotSupportedException)
-        {
-            element = default;
             return false;
         }
     }
-
-    private static bool TryGetString(JsonElement element, string name, out string value)
+    private static bool TryGetProperty(
+    JsonElement element,
+    string propertyName,
+    out JsonElement value)
+    {
+        value = default;
+        if (element.ValueKind != JsonValueKind.Object)
+            return false;
+        foreach (JsonProperty property in element.EnumerateObject())
+        {
+            if (string.Equals(
+            property.Name,
+            propertyName,
+            StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+        return false;
+    }
+    private static bool TryGetString(
+    JsonElement element,
+    string propertyName,
+    out string value)
     {
         value = "";
-
-        if (element.ValueKind != JsonValueKind.Object)
+        if (!TryGetProperty(element, propertyName, out JsonElement property))
             return false;
-
-        foreach (JsonProperty property in element.EnumerateObject())
-        {
-            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase) &&
-                property.Value.ValueKind == JsonValueKind.String)
-            {
-                value = property.Value.GetString() ?? "";
-                return true;
-            }
-        }
-
-        return false;
+        if (property.ValueKind != JsonValueKind.String)
+            return false;
+        value = property.GetString() ?? "";
+        return true;
     }
-
-    private static bool TryGetInt32(JsonElement element, string name, out int value)
+    private static bool TryGetInt32(
+    JsonElement element,
+    string propertyName,
+    out int value)
     {
         value = 0;
-
-        if (element.ValueKind != JsonValueKind.Object)
+        if (!TryGetProperty(element, propertyName, out JsonElement property))
             return false;
-
-        foreach (JsonProperty property in element.EnumerateObject())
-        {
-            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
-            {
-                return property.Value.ValueKind == JsonValueKind.Number &&
-                       property.Value.TryGetInt32(out value);
-            }
-        }
-
-        return false;
+        return property.ValueKind == JsonValueKind.Number
+        && property.TryGetInt32(out value);
+    }
+    private static bool HasNonEmptyString(
+    JsonElement element,
+    string propertyName)
+    {
+        return TryGetString(element, propertyName, out string value)
+        && !string.IsNullOrWhiteSpace(value);
     }
 }

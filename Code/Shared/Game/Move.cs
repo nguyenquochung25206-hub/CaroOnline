@@ -1,4 +1,3 @@
-// TODO TV4: Một nước đi trên bàn cờ.
 namespace CaroGame.Shared.Game
 {
     public enum Player
